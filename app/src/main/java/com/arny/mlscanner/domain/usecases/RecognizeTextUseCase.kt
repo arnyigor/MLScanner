@@ -43,6 +43,9 @@ class RecognizeTextUseCase(
             Result.failure(e)
         }
     }
+
+    fun preprocessImage(source: Bitmap, scanSettings: ScanSettings): Bitmap =
+        preprocessor.preprocessImage(source, scanSettings)
 }
 
 // Extension для Tasks -> Coroutines

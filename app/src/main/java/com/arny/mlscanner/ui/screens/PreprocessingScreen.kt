@@ -1,8 +1,7 @@
 package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
-import android.graphics.Color
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -33,6 +32,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,29 +42,49 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.createBitmap
+import androidx.navigation.NavHostController
 import com.arny.mlscanner.domain.models.ScanSettings
-
-private fun dummyBitmap(): Bitmap = createBitmap(200, 200).apply { eraseColor(Color.LTGRAY) }
+import com.arny.mlscanner.ui.navigation.Screen
+import org.koin.androidx.compose.koinViewModel
 
 @Preview(showBackground = true, name = "PreprocessingScreen – default")
 @Composable
 fun PreprocessingScreenPreview() {
     PreprocessingScreen(
-        capturedImage = dummyBitmap(),
-        onStartScan = { /* ничего не делаем */ },
+        previewBitmap = null, //createBitmap(200, 200).apply { eraseColor(Color.LTGRAY) },
+        onStartScan = { _, _ -> /* ничего не делаем */ },
+        onUpdateSettings = { /* ничего не делаем */ },
         onBack = { /* ничего не делаем */ }
     )
+}
+
+@Composable
+fun PreprocessingScreen(
+    viewModel: ScanViewModel = koinViewModel(),
+    navController: NavHostController
+) {
+    val previewBitmap by viewModel.previewImage.collectAsState()
+    viewModel.capturedBitmap?.let { bitmap ->
+        PreprocessingScreen(
+            previewBitmap = previewBitmap,
+            onUpdateSettings = viewModel::updateSettings,
+            onStartScan = { settings, cropRect ->
+                viewModel.applyCropAndScan(cropRect, settings)
+                navController.navigate(Screen.Scanning.route)
+            },
+            onBack = { navController.popBackStack() }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreprocessingScreen(
-    capturedImage: Bitmap,
-    onStartScan: (ScanSettings) -> Unit,
+    previewBitmap: Bitmap?,
+    onUpdateSettings: (ScanSettings) -> Unit,
+    onStartScan: (ScanSettings, CropRect?) -> Unit,
     onBack: () -> Unit
 ) {
     var contrastLevel by remember { mutableFloatStateOf(1.0f) }
@@ -72,6 +93,7 @@ fun PreprocessingScreen(
     var denoiseEnabled by remember { mutableStateOf(true) }
     var binarizationEnabled by remember { mutableStateOf(true) }
     var autoRotateEnabled by remember { mutableStateOf(true) }
+    var cropRect by remember { mutableStateOf<CropRect?>(null) }
 
     val settings = ScanSettings(
         contrastLevel = contrastLevel,
@@ -81,6 +103,19 @@ fun PreprocessingScreen(
         autoRotateEnabled = autoRotateEnabled,
         binarizationEnabled = binarizationEnabled
     )
+
+    LaunchedEffect(contrastLevel, brightnessLevel, sharpenLevel) {
+        onUpdateSettings(
+            ScanSettings(
+                contrastLevel = contrastLevel,
+                brightnessLevel = brightnessLevel,
+                sharpenLevel = sharpenLevel,
+                denoiseEnabled = true,
+                autoRotateEnabled = true,
+                binarizationEnabled = false
+            )
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -93,24 +128,6 @@ fun PreprocessingScreen(
                 }
             )
         },
-        bottomBar = {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()   // <-- важное изменение
-            ) {
-                FilledTonalButton(
-                    onClick = { onStartScan(settings) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.DocumentScanner, "Scan", modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Start Scanning")
-                }
-            }
-        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -125,12 +142,45 @@ fun PreprocessingScreen(
                     .height(250.dp)
                     .padding(16.dp)
             ) {
-                Image(
-                    bitmap = capturedImage.asImageBitmap(),
-                    contentDescription = "Captured image",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                if (previewBitmap != null) {
+                    /* ---------- Normal preview --------------------------------- */
+                    CropImageView(
+                        bitmap = previewBitmap.asImageBitmap(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(250.dp)          // keep same size as before
+                            .padding(16.dp),
+                        onCropChanged = { cropRect = it }
+                    )
+                } else {
+                    /* ---------- Error fallback -------------------------------- */
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = "Error preview",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(64.dp)
+                        )
+                    }
+                }
+            }
+
+            FilledTonalButton(
+                onClick = {
+                    onStartScan(settings, cropRect)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Icon(Icons.Default.DocumentScanner, "Scan", modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Start Scanning")
             }
 
             Text(
