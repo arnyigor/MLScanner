@@ -57,8 +57,6 @@ fun AppNavigation(
             }
         }
 
-        // ui/navigation/AppNavigation.kt
-
         composable(Screen.Scanning.route) {
             LaunchedEffect(Unit) {
                 viewModel.startScanning()
@@ -93,7 +91,6 @@ fun AppNavigation(
                 }
             )
         }
-
 
         composable(Screen.Result.route) {
             val result by viewModel.recognizedText.collectAsState()
