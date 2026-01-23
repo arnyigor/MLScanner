@@ -28,6 +28,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
+import org.mockito.ArgumentMatchers.anyInt
+import org.mockito.ArgumentMatchers.anyList
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
@@ -39,16 +41,13 @@ class AdvancedScanViewModelTest {
 
     @get:Rule
     val instantTaskExecutorRule = InstantTaskExecutorRule()
-
     @get:Rule
     val mainCoroutineRule = MainCoroutineRule()
 
     @Mock
     private lateinit var mockUseCase: AdvancedRecognizeTextUseCase
-
     @Mock
     private lateinit var mockPdfEngine: PdfRedactionEngine
-
     @Mock
     private lateinit var mockMatchingEngine: MatchingEngine
 
@@ -64,14 +63,19 @@ class AdvancedScanViewModelTest {
     }
 
     private fun createViewModel() {
-        viewModel = AdvancedScanViewModel(mockUseCase, mockPdfEngine, mockMatchingEngine)
+        viewModel = AdvancedScanViewModel(
+            advancedRecognizeTextUseCase = mockUseCase,
+            pdfRedactionEngine = mockPdfEngine,
+            matchingEngine = mockMatchingEngine
+        )
     }
 
     @After
     fun tearDown() {
-        // Resources imply cleared by Rules
+        // Resources are released by Rules
     }
 
+    /** 1. Проверка инициализации OCR‑движка */
     @Test
     fun `should initialize engine on creation`() = runTest {
         createViewModel()
@@ -79,6 +83,7 @@ class AdvancedScanViewModelTest {
         assertTrue(viewModel.uiState.value.isOcrEngineInitialized)
     }
 
+    /** 2. Проверка распознавания текста + сопоставления */
     @Test
     fun `recognizeText should update state to success and perform matching`() = runTest {
         // Arrange
@@ -93,9 +98,12 @@ class AdvancedScanViewModelTest {
             timestamp = System.currentTimeMillis()
         )
 
-        // <‑‑ КОРРЕКТНОЕ МОКИРОВАНИЕ suspend‑функции
+        // КОРРЕКТНОЕ МОКИРОВАНИЕ suspend‑функций
         whenever(mockUseCase.execute(any(), any())).thenReturn(ocrResult)
-        whenever(mockMatchingEngine.batchMatch(any())).thenReturn(matchingResult)
+        // batchMatch имеет три параметра → все они должны быть матчерами
+        whenever(
+            mockMatchingEngine.batchMatch(anyList(), any(), anyInt())
+        ).thenReturn(matchingResult)
 
         // Act
         viewModel.recognizeText(mockBitmap, settings)
@@ -108,19 +116,18 @@ class AdvancedScanViewModelTest {
         assertEquals(matchingResult, state.matchingResult)
     }
 
+    /** 3. Создание защищённого PDF */
     @Test
     fun `createRedactedPdf should flow through loading to success`() = runTest {
         // Arrange
         createViewModel()
         val boxes = listOf<TextBox>()
 
-        // FIX: Создаем реальный объект RedactionMask вместо несуществующего Enum
         val mask = RedactionMask(redactedBoxes = emptyList())
 
         val inputPath = "in.jpg"
         val outputPath = "out.pdf"
 
-        // FIX: Корректный конструктор RedactionResult (строки вместо File)
         val redactionResult = RedactionResult(
             originalImagePath = inputPath,
             redactedImagePath = outputPath,
@@ -128,9 +135,8 @@ class AdvancedScanViewModelTest {
             timestamp = System.currentTimeMillis()
         )
 
-        whenever(mockPdfEngine.redactAndSavePdf(any(), any(), any(), any())).thenReturn(
-            redactionResult
-        )
+        whenever(mockPdfEngine.redactAndSavePdf(any(), any(), any(), any()))
+            .thenReturn(redactionResult)
 
         // Act
         viewModel.createRedactedPdf(inputPath, boxes, mask, outputPath)
@@ -142,6 +148,7 @@ class AdvancedScanViewModelTest {
         assertEquals(redactionResult, state.redactionResult)
     }
 
+    /** 4. Обработка исключения при создании PDF */
     @Test
     fun `createRedactedPdf should handle exceptions`() = runTest {
         // Arrange
@@ -149,7 +156,6 @@ class AdvancedScanViewModelTest {
         whenever(mockPdfEngine.redactAndSavePdf(any(), any(), any(), any()))
             .thenThrow(RuntimeException("PDF Error"))
 
-        // FIX: Создаем реальный объект RedactionMask
         val mask = RedactionMask(redactedBoxes = emptyList())
 
         // Act
@@ -162,16 +168,14 @@ class AdvancedScanViewModelTest {
         assertTrue(state.errorMessage?.contains("PDF Error") == true)
     }
 
-    private fun createTestOcrResult(): OcrResult {
-        return OcrResult(
-            textBoxes = listOf(
-                TextBox("Test", 0.9f, mock())
-            ),
+    private fun createTestOcrResult(): OcrResult =
+        OcrResult(
+            textBoxes = listOf(TextBox("Test", 0.9f, mock())),
             timestamp = System.currentTimeMillis()
         )
-    }
 }
 
+/** Тестовый Rule для работы с MainDispatcher */
 @ExperimentalCoroutinesApi
 class MainCoroutineRule(
     val dispatcher: TestDispatcher = StandardTestDispatcher()

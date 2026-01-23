@@ -6,17 +6,20 @@ import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.OcrResult
 import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.ScanSettings
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Улучшенный UseCase для распознавания текста
- * Использует новый OCR-движок на основе ONNX Runtime
- * В соответствии с требованиями TECH.md
+ * Улучшенный UseCase для распознавания текста.
+ *
+ * Добавлен параметр `ioDispatcher` – позволяет в тестах заменить
+ * реальный Default‑dispatcher на Test‑dispatcher.
  */
 class AdvancedRecognizeTextUseCase(
     private val ocrEngine: OcrEngine,
-    private val imagePreprocessor: ImagePreprocessor
+    private val imagePreprocessor: ImagePreprocessor,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default  // ← NEW
 ) {
     /**
      * Выполнение распознавания текста с использованием нового OCR-движка
@@ -24,7 +27,7 @@ class AdvancedRecognizeTextUseCase(
     suspend fun execute(
         bitmap: Bitmap,
         settings: ScanSettings
-    ): OcrResult = withContext(Dispatchers.Default) {
+    ): OcrResult = withContext(ioDispatcher) {
         // 1. Предобработка изображения
         val preprocessedBitmap = imagePreprocessor.preprocessImage(bitmap, settings)
 

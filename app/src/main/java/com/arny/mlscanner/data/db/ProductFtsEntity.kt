@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Fts4
 import androidx.room.PrimaryKey
+import com.arny.mlscanner.domain.models.ProductItem
 
 @Entity(tableName = "products")
 data class ProductEntity(
@@ -30,7 +31,7 @@ data class ProductEntity(
             createdAt = createdAt
         )
     companion object {
-        fun fromProductItem(item: com.arny.mlscanner.domain.models.ProductItem): ProductEntity =
+        fun fromProductItem(item: ProductItem): ProductEntity =
             ProductEntity(
                 localId = 0,
                 id = item.id,

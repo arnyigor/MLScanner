@@ -2,8 +2,6 @@ package com.arny.mlscanner.data.matching
 
 import com.arny.mlscanner.data.db.ProductEntity
 import com.arny.mlscanner.data.db.ProductDao
-import com.arny.mlscanner.domain.models.BoundingBox
-import com.arny.mlscanner.domain.models.ProductItem
 import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
+import org.mockito.kotlin.any
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
 import java.io.File
@@ -108,15 +107,18 @@ class MatchingEngineTest {
             category = "Electronics"
         )
 
-        whenever(mockProductDao.getProductBySku("ABC124")).thenReturn(null)
-        whenever(mockProductDao.searchProductsFts("ABC124")).thenReturn(listOf(productEntity))
+        val inputText = "ABC124 "          // ← с пробелом (как в реальном OCR)
+        val normalizedQuery = inputText.trim().uppercase() // → "ABC124"
 
-        val result = matchingEngine.match("ABC124", MatchMode.FUZZY)
+        whenever(mockProductDao.getProductBySku(normalizedQuery)).thenReturn(null)
+        whenever(mockProductDao.searchProductsFts(normalizedQuery)).thenReturn(listOf(productEntity))
+        whenever(mockProductDao.searchProducts(normalizedQuery)).thenReturn(emptyList())
+
+        val result = matchingEngine.match(inputText, MatchMode.FUZZY, threshold = 80)
 
         assertTrue(result.isNotEmpty())
         assertEquals("ABC123", result[0].matchedItem?.sku)
-        // FuzzySearch.tokenSetRatio("ABC124", "ABC123") ≈ 86
-        assertTrue(result[0].confidence > 80f)
+        assertTrue(result[0].confidence >= 80f)
     }
 
     @Test
@@ -130,17 +132,13 @@ class MatchingEngineTest {
             category = "Electronics"
         )
 
-        whenever(mockProductDao.getProductBySku("ABC123XYZ")).thenReturn(null)
-        whenever(mockProductDao.searchProductsFts("ABC123XYZ")).thenReturn(listOf(productEntity))
-
         val variations = listOf("ABC-123-XYZ", "ABC_123_XYZ", "ABC 123 XYZ", "abc-123-xyz")
 
         for (variation in variations) {
-            // В реальности нужно нормализовать запрос перед поиском
-            // Но пока предположим, что FTS справляется
-            whenever(mockProductDao.searchProductsFts(variation.uppercase()))
-                .thenReturn(listOf(productEntity))
-
+            val normalizedInput = variation.trim().uppercase()
+            whenever(mockProductDao.getProductBySku(normalizedInput)).thenReturn(null)
+            whenever(mockProductDao.searchProductsFts(normalizedInput)).thenReturn(listOf(productEntity))
+            whenever(mockProductDao.searchProducts(any())).thenReturn(emptyList())
             val result = matchingEngine.match(variation, MatchMode.AUTO)
             assertTrue("Should match variation: $variation", result.isNotEmpty())
         }

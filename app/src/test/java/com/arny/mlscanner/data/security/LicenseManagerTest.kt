@@ -3,6 +3,7 @@ package com.arny.mlscanner.data.security
 import android.content.Context
 import android.content.res.AssetManager
 import android.os.Build
+import android.util.Base64
 import org.junit.Before
 import org.junit.Test
 import org.junit.Assert.*
@@ -12,59 +13,84 @@ import org.mockito.MockitoAnnotations
 import org.mockito.Mockito.`when`
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Files
 import java.security.KeyPairGenerator
-import java.security.PublicKey
-import java.text.SimpleDateFormat
-import java.util.*
+import java.security.Signature
+import java.util.Date
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
 
+/**
+ * Тесты для {@link LicenseManager}.
+ *
+ * В тестовой среде заменяем:
+ * 1) `masterKeySupplier` – возвращает один и тот же JDK‑AES ключ,
+ * 2) `deviceIdProvider` – фиксированный строковый ID.
+ */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [Build.VERSION_CODES.O_MR1]) // Требуется для KeyStore
+@Config(sdk = [Build.VERSION_CODES.O_MR1])
 class LicenseManagerTest {
 
-    @Mock
-    private lateinit var mockContext: Context
-
-    @Mock
-    private lateinit var mockAssetManager: AssetManager
+    @Mock private lateinit var mockContext: Context
+    @Mock private lateinit var mockAssetManager: AssetManager
 
     private lateinit var licenseManager: LicenseManager
 
-    private lateinit var keyPair: java.security.KeyPair
-    private lateinit var publicKey: PublicKey
+    /* ------------------------------------------------------------- */
+    /*  Ключи для подписи и проверки                                 */
+    /* ------------------------------------------------------------- */
+
+    private val kpg = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }
+    private val keyPair by lazy(kpg::generateKeyPair)
+    private val publicKey get() = keyPair.public
 
     @Before
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        licenseManager = LicenseManager(mockContext)
 
-        // Генерация ключей для тестов
-        val kpg = KeyPairGenerator.getInstance("RSA")
-        kpg.initialize(2048)
-        keyPair = kpg.generateKeyPair()
-        publicKey = keyPair.public
+        // Создаём один AES‑ключ и фиксируем лямбду‑поставщик
+        val aesKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        val aesSupplier: () -> SecretKey = { aesKey }
 
-        // Мок assets
+        licenseManager = LicenseManager(
+            context = mockContext,
+            masterKeySupplier = aesSupplier
+        )
+
         `when`(mockContext.assets).thenReturn(mockAssetManager)
     }
 
-    // === Тесты ===
+    /* ------------------------------------------------------------- */
+    /*  Тесты – проверка корректности ID устройства                  */
+    /* ------------------------------------------------------------- */
 
     @Test
-    fun `should generate unique device ID correctly`() {
-        // Мокаем ANDROID_ID как fallback
-        `when`(mockContext.contentResolver).thenReturn(null)
-        licenseManager.deviceIdProvider = { "test-device-id-12345" }
-
-        val deviceId = licenseManager.generateDeviceId()
-        assertEquals("test-device-id-12345", deviceId)
+    fun `should return mocked device ID from provider`() {
+        val customId = "test-device-id-12345"
+        licenseManager.deviceIdProvider = { customId }
+        assertEquals(customId, licenseManager.currentDeviceId())
     }
+
+    /* ------------------------------------------------------------- */
+    /*  Тесты – шифрование/расшифровка                                 */
+    /* ------------------------------------------------------------- */
+
+    @Test
+    fun `should encrypt and decrypt license data securely`() {
+        val secret = "secret-license-info"
+        val enc = licenseManager.encrypt(secret)
+        assertNotEquals(secret, enc) // не должно быть открытым текстом
+        val dec = licenseManager.decrypt(enc)
+        assertEquals(secret, dec)
+    }
+
+    /* ------------------------------------------------------------- */
+    /*  Тесты – проверка лицензии (логика unchanged)                  */
+    /* ------------------------------------------------------------- */
 
     @Test
     fun `should verify valid license successfully`() {
-        // Подготовка данных
         licenseManager.deviceIdProvider = { "DEVICE123" }
         licenseManager.publicKeyLoader = { publicKey }
 
@@ -72,15 +98,15 @@ class LicenseManagerTest {
         val dataToSign = "$encryptedDeviceId|2030-12-31|scan,redact"
         val signature = signData(dataToSign, keyPair.private)
 
-        val licenseFile = createTempLicenseFile(
+        val file = createTempLicenseFile(
             encryptedDeviceId = encryptedDeviceId,
             signature = signature,
             expiryDate = "2030-12-31",
             features = "scan,redact"
         )
 
-        assertTrue(licenseManager.verifyLicense(licenseFile))
-        licenseFile.delete()
+        assertTrue(licenseManager.verifyLicense(file))
+        file.delete()
     }
 
     @Test
@@ -92,15 +118,15 @@ class LicenseManagerTest {
         val dataToSign = "$encryptedDeviceId|2020-01-01|scan"
         val signature = signData(dataToSign, keyPair.private)
 
-        val licenseFile = createTempLicenseFile(
+        val file = createTempLicenseFile(
             encryptedDeviceId = encryptedDeviceId,
             signature = signature,
             expiryDate = "2020-01-01",
             features = "scan"
         )
 
-        assertFalse(licenseManager.verifyLicense(licenseFile))
-        licenseFile.delete()
+        assertFalse(licenseManager.verifyLicense(file))
+        file.delete()
     }
 
     @Test
@@ -112,31 +138,27 @@ class LicenseManagerTest {
         val dataToSign = "$encryptedDeviceId|2030-12-31|scan"
         val signature = signData(dataToSign, keyPair.private)
 
-        val licenseFile = createTempLicenseFile(
+        val file = createTempLicenseFile(
             encryptedDeviceId = encryptedDeviceId,
             signature = signature,
             expiryDate = "2030-12-31",
             features = "scan"
         )
 
-        assertFalse(licenseManager.verifyLicense(licenseFile))
-        licenseFile.delete()
+        assertFalse(licenseManager.verifyLicense(file))
+        file.delete()
     }
 
     @Test
     fun `should validate RSA signature correctly`() {
         val data = "test-data"
-        val signature = signData(data, keyPair.private)
-        val isValid = licenseManager.validateSignature(data, publicKey.encoded, signature)
+        val sig = signData(data, keyPair.private)
+        val isValid = licenseManager.validateSignature(
+            data,
+            publicKey.encoded,
+            sig
+        )
         assertTrue(isValid)
-    }
-
-    @Test
-    fun `should encrypt and decrypt license data securely`() {
-        val testData = "secret-license-info"
-        val encrypted = licenseManager.encrypt(testData)
-        val decrypted = licenseManager.decrypt(encrypted)
-        assertEquals(testData, decrypted)
     }
 
     @Test
@@ -148,13 +170,15 @@ class LicenseManagerTest {
         assertFalse(licenseManager.isDateValid(past))
     }
 
-    // === Вспомогательные методы ===
+    /* ------------------------------------------------------------- */
+    /*  Вспомогательные методы для тестов                           */
+    /* ------------------------------------------------------------- */
 
-    private fun signData(data: String, privateKey: java.security.PrivateKey): String {
-        val signature = java.security.Signature.getInstance("SHA256withRSA")
-        signature.initSign(privateKey)
-        signature.update(data.toByteArray())
-        return android.util.Base64.encodeToString(signature.sign(), android.util.Base64.NO_WRAP)
+    private fun signData(data: String, privKey: java.security.PrivateKey): String {
+        val sig = Signature.getInstance("SHA256withRSA")
+        sig.initSign(privKey)
+        sig.update(data.toByteArray())
+        return Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
     }
 
     private fun createTempLicenseFile(
@@ -171,7 +195,6 @@ class LicenseManagerTest {
                 "features": "$features"
             }
         """.trimIndent()
-
         return Files.createTempFile("license_", ".lic").toFile().apply {
             writeText(json)
             deleteOnExit()
