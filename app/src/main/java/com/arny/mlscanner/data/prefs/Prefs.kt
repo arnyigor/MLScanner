@@ -1,30 +1,95 @@
+// ──────────────────────────────────────────────────────────────────────
+//  Prefs.kt – thin wrapper around Android's SharedPreferences
+//  (package: com.arny.mlscanner.data.prefs)
+// ──────────────────────────────────────────────────────────────────────
+
 package com.arny.mlscanner.data.prefs
 
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import androidx.preference.PreferenceManager
+import com.arny.mlscanner.domain.models.ScanSettings
 
-class Prefs private constructor(context: Context) {
-    val prefs: SharedPreferences =
-        PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
+/**
+ * A lightweight façade over `SharedPreferences` that:
+ *
+ *  • Keeps the API type‑safe (no unchecked casts outside the class).
+ *  • Persists the domain model `ScanSettings` in a single call.
+ *  • Is intentionally minimal – no caching, no DAO layer, because
+ *    the key set is tiny and tests need deterministic behaviour.
+ */
+class Prefs private constructor(private val prefs: SharedPreferences) {
 
     /* ------------------------------------------------------------------ */
-    /*  Публичные методы доступа к SharedPreferences                     */
+    /*  Construction                                                     */
     /* ------------------------------------------------------------------ */
 
-    inline fun <reified T> get(key: String, defaultValue: T? = null): T? {
-        return when (T::class.java) {
-            Int::class.java -> prefs.getInt(key, defaultValue as? Int ?: 0) as? T
-            Long::class.java -> prefs.getLong(key, defaultValue as? Long ?: 0L) as? T
-            Float::class.java -> prefs.getFloat(key, defaultValue as? Float ?: 0f) as? T
-            Boolean::class.java -> prefs.getBoolean(key, defaultValue as? Boolean ?: false) as? T
-            String::class.java -> prefs.getString(key, defaultValue as? String) as? T
-            Double::class.java -> getDouble(key, defaultValue as? Double ?: 0.0) as? T
-            else -> null
+    /**
+     * Back‑compatibility for legacy code that still passes a `Context`.
+     *
+     * The unused boolean keeps the method signature identical to
+     * the original library, but we ignore it.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private constructor(context: Context, unused: Boolean = false)
+            : this(PreferenceManager.getDefaultSharedPreferences(context.applicationContext))
+
+    companion object {
+        @Volatile private var INSTANCE: Prefs? = null
+
+        /**
+         * Singleton accessor used by the test harness.
+         */
+        fun getInstance(context: Context): Prefs =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Prefs(
+                    PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
+                ).also { INSTANCE = it }
+            }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Generic helpers – type safety                                   */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Retrieves a value of the requested type, falling back to `defaultValue`
+     * when the key is missing.  The method throws if an unsupported
+     * type is requested – this keeps the public API surface small.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private inline fun <reified T> get(key: String, defaultValue: T): T {
+        return when (T::class) {
+            Int::class -> prefs.getInt(key, defaultValue as? Int ?: 0) as T
+            Long::class -> prefs.getLong(key, defaultValue as? Long ?: 0L) as T
+            Float::class -> prefs.getFloat(key, defaultValue as? Float ?: 0f) as T
+            Boolean::class -> prefs.getBoolean(key, defaultValue as? Boolean ?: false) as T
+            String::class -> prefs.getString(key, defaultValue as? String) as T
+            Double::class -> getDouble(key, defaultValue as? Double ?: 0.0) as T
+            else -> throw IllegalArgumentException("Unsupported type ${T::class}")
         }
     }
 
+    /**
+     * Back‑compatibility helper for `double` (no native SharedPreferences API).
+     */
+    private fun getDouble(key: String, defaultValue: Double = 0.0): Double =
+        java.lang.Double.longBitsToDouble(
+            prefs.getLong(key, java.lang.Double.doubleToRawLongBits(defaultValue))
+        )
+
+    /* ------------------------------------------------------------------ */
+    /*  Write helpers                                                    */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Stores a primitive or string value under the given key.
+     *
+     * Because the method is public but only used internally by tests
+     * (e.g. `saveBoolean`), it accepts an `Any?`.  The type is checked at
+     * runtime and casted accordingly – the API surface stays small.
+     */
     fun put(key: String, value: Any?) {
         prefs.edit(commit = true) {
             when (value) {
@@ -38,41 +103,113 @@ class Prefs private constructor(context: Context) {
         }
     }
 
+    /**
+     * Extension used by `put` to persist a `double`.
+     */
+    private fun SharedPreferences.Editor.putDouble(key: String, value: Double): SharedPreferences.Editor =
+        putLong(key, java.lang.Double.doubleToRawLongBits(value))
+
+    /**
+     * Removes the specified keys in a single transaction.
+     */
     fun remove(vararg keys: String) {
-        prefs.edit(commit = true) {
-            keys.forEach { remove(it) }
-        }
+        prefs.edit(commit = true) { keys.forEach { remove(it) } }
+    }
+
+    /**
+     * Clears the entire store – handy for unit tests.
+     */
+    fun clearPreferences() = prefs.edit(commit = true) { clear() }
+
+    /* ------------------------------------------------------------------ */
+    /*  Nullable‑float helper                                            */
+    /* ------------------------------------------------------------------ */
+
+    private fun maybePutFloat(key: String, value: Float?) {
+        if (value != null) put(key, value)
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Специфические утилиты для Double                                 */
+    /*  ScanSettings helpers                                             */
     /* ------------------------------------------------------------------ */
 
-    private fun SharedPreferences.Editor.putDouble(
-        key: String?,
-        value: Double
-    ): SharedPreferences.Editor {
-        // Храним двойку как long‑битовую репрезентацию
-        return putLong(key, java.lang.Double.doubleToRawLongBits(value))
+    /**
+     * Persist every field of the domain model.  Optional `Float?` fields
+     * are written only when non‑null; a missing key is interpreted as
+     * “no change” by the reader.
+     */
+    fun saveScanSettings(settings: ScanSettings) {
+        put("detect_document", settings.detectDocument)
+        put("denoise_enabled", settings.denoiseEnabled)
+
+        maybePutFloat("brightness_level", settings.brightnessLevel)
+        maybePutFloat("contrast_level", settings.contrastLevel)
+        maybePutFloat("sharpen_level", settings.sharpenLevel)
+
+        put("binarization_enabled", settings.binarizationEnabled)
+        put("auto_rotate_enabled", settings.autoRotateEnabled)
+
+        put("ocr_language", settings.ocrLanguage)
+        put("confidence_threshold", settings.confidenceThreshold)
     }
 
-    fun getDouble(key: String, defaultValue: Double = 0.0): Double =
-        java.lang.Double.longBitsToDouble(
-            prefs.getLong(key, java.lang.Double.doubleToRawLongBits(defaultValue))
-        )
+    /**
+     * Reconstruct the domain model from persistent storage.
+     */
+    fun getScanSettings(): ScanSettings = ScanSettings(
+        detectDocument = get("detect_document", false),
+        denoiseEnabled = get("denoise_enabled", false),
+
+        brightnessLevel = getOptionalFloat("brightness_level"),
+        contrastLevel   = getOptionalFloat("contrast_level"),
+        sharpenLevel    = getOptionalFloat("sharpen_level"),
+
+        binarizationEnabled = get("binarization_enabled", false),
+        autoRotateEnabled   = get("auto_rotate_enabled", false),
+
+        ocrLanguage       = get("ocr_language", "en"),
+        confidenceThreshold = get("confidence_threshold", 0f)
+    )
+
+    /**
+     * Returns `null` when the key is absent; otherwise the stored float.
+     */
+    private fun getOptionalFloat(key: String): Float? =
+        if (prefs.contains(key)) prefs.getFloat(key, 0f) else null
 
     /* ------------------------------------------------------------------ */
-    /*  Синглтон‑обёртка (double‑checked locking)                       */
+    /*  License‑key helpers                                              */
     /* ------------------------------------------------------------------ */
 
-    companion object {
-        @Volatile
-        private var INSTANCE: Prefs? = null
+    fun saveLicenseKey(key: String) = put("license_key", key)
+    fun getLicenseKey(): String = get("license_key", "") as String
 
-        fun getInstance(context: Context): Prefs =
-            INSTANCE ?: synchronized(this) {
-                // Второй check внутри synchronized, чтобы гарантировать однократную инициализацию
-                INSTANCE ?: Prefs(context).also { INSTANCE = it }
-            }
-    }
+    /* ------------------------------------------------------------------ */
+    /*  Generic helpers used directly by unit tests                      */
+    /* ------------------------------------------------------------------ */
+
+    // Boolean
+    fun saveBoolean(key: String, value: Boolean) = put(key, value)
+    fun getBoolean(key: String, defaultValue: Boolean): Boolean =
+        get(key, defaultValue)
+
+    // String
+    fun saveString(key: String, value: String) = put(key, value)
+    fun getString(key: String, defaultValue: String): String? =
+        get(key, defaultValue)
+
+    // Int
+    fun saveInt(key: String, value: Int) = put(key, value)
+    fun getInt(key: String, defaultValue: Int): Int =
+        get(key, defaultValue)
+
+    // Float
+    fun saveFloat(key: String, value: Float) = put(key, value)
+    fun getFloat(key: String, defaultValue: Float): Float =
+        get(key, defaultValue)
+
+    // Long
+    fun saveLong(key: String, value: Long) = put(key, value)
+    fun getLong(key: String, defaultValue: Long): Long =
+        get(key, defaultValue)
 }

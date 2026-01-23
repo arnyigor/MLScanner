@@ -2,6 +2,7 @@
 agp = "8.13.1"
 cameraxVersion = "1.3.1"
 foundation = "1.9.5"
+junitJupiter = "6.0.2"
 koinAndroid = "4.0.2"
 koinAndroidxCompose = "4.0.2"
 kotlin = "2.1.10"
@@ -21,16 +22,26 @@ materialIconsExtended = "1.7.3"
 opencv = "4.9.0"
 retrofit2KotlinxSerializationConverter = "1.0.0"
 retrofitVersion = "3.0.0"
+robolectric = "4.16.1"
 roomRuntime = "2.6.1"
 pagingCompose = "3.3.6"
 preferenceKtx = "1.2.1"
 securityCrypto = "1.0.0"
-navigationCompose = "2.9.5"
+navigationCompose = "2.9.6"
 navigation3Runtime = "1.0.0"
 navigation3Ui = "1.0.0"
 ktor = "3.3.3"
 kotlinx-coroutines = "1.10.2"
 textRecognition = "16.0.0"
+onnxRuntime = "1.23.2"
+pdfboxAndroid = "2.0.27.0"  # Обновлено до стабильной версии
+sqlcipher = "4.5.4"     # Обновлено до нового артефакта
+fuzzywuzzy = "1.4.0"
+opencsv = "5.12.0"
+navigationRuntimeKtx = "2.9.6"
+mockito = "5.10.0"
+mockitoKotlin = "5.2.1"
+archCoreTesting = "2.2.0"
 
 [libraries]
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraxVersion" }
@@ -53,6 +64,7 @@ androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material3-adaptive-navigation-suite = { group = "androidx.compose.material3", name = "material3-adaptive-navigation-suite" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junitJupiter" }
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koinAndroid" }
 koin-androidx-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koinAndroidxCompose" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
@@ -82,7 +94,18 @@ ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "k
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "textRecognition" }
+onnxruntime = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxRuntime" }  # Используем только одну версию
+pdfbox-android = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfboxAndroid" }
+sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher" }  # Обновленный артефакт
+fuzzywuzzy = { module = "me.xdrop:fuzzywuzzy", version.ref = "fuzzywuzzy" }
+opencsv = { module = "com.opencsv:opencsv", version.ref = "opencsv" }
+androidx-navigation-runtime-ktx = { group = "androidx.navigation", name = "navigation-runtime-ktx", version.ref = "navigationRuntimeKtx" }
+mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlin" }
+androidx-core-testing = { module = "androidx.arch.core:core-testing", version.ref = "archCoreTesting" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

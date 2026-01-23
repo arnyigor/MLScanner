@@ -34,3 +34,5 @@ google-services.json
 *.hprof
 
 .aider*
+/AGENTS.md
+/BACKAGENTS.md.back

@@ -5,6 +5,10 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
+import kotlin.text.Charsets.UTF_8
+import android.util.Base64
 
 /**
  * Singleton‑обёртка над EncryptedSharedPreferences.
@@ -97,6 +101,94 @@ class SecurePrefs private constructor(context: Context) {
     }
 
     /* ------------------------------------------------------------------ */
+    /*  Additional secure methods (now simplified, using EncryptedSharedPreferences) */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Saves a secure string value (now simplified - just use putString)
+     */
+    fun saveSecureString(key: String, value: String) {
+        prefs.edit { putString(key, value) }
+    }
+
+    /**
+     * Gets a secure string value (now simplified - just use getString)
+     */
+    fun getSecureString(key: String, defaultValue: String = ""): String {
+        return prefs.getString(key, defaultValue) ?: defaultValue
+    }
+
+    /**
+     * Saves a secure boolean value (now simplified - just use putBoolean)
+     */
+    fun saveSecureBoolean(key: String, value: Boolean) {
+        prefs.edit { putBoolean(key, value) }
+    }
+
+    /**
+     * Gets a secure boolean value (now simplified - just use getBoolean)
+     */
+    fun getSecureBoolean(key: String, defaultValue: Boolean = false): Boolean {
+        return prefs.getBoolean(key, defaultValue)
+    }
+
+    /**
+     * Saves a secure int value (now simplified - just use putInt)
+     */
+    fun saveSecureInt(key: String, value: Int) {
+        prefs.edit { putInt(key, value) }
+    }
+
+    /**
+     * Gets a secure int value (now simplified - just use getInt)
+     */
+    fun getSecureInt(key: String, defaultValue: Int = 0): Int {
+        return prefs.getInt(key, defaultValue)
+    }
+
+    /**
+     * Saves a secure float value (now simplified - just use putFloat)
+     */
+    fun saveSecureFloat(key: String, value: Float) {
+        prefs.edit { putFloat(key, value) }
+    }
+
+    /**
+     * Gets a secure float value (now simplified - just use getFloat)
+     */
+    fun getSecureFloat(key: String, defaultValue: Float = 0f): Float {
+        return prefs.getFloat(key, defaultValue)
+    }
+
+    /**
+     * Saves a secure long value (now simplified - just use putLong)
+     */
+    fun saveSecureLong(key: String, value: Long) {
+        prefs.edit { putLong(key, value) }
+    }
+
+    /**
+     * Gets a secure long value (now simplified - just use getLong)
+     */
+    fun getSecureLong(key: String, defaultValue: Long = 0L): Long {
+        return prefs.getLong(key, defaultValue)
+    }
+
+    /**
+     * Checks for the presence of a secure key
+     */
+    fun containsSecureKey(key: String): Boolean {
+        return prefs.contains(key)
+    }
+
+    /**
+     * Clears all secure preferences
+     */
+    fun clearSecurePrefs() {
+        prefs.edit { clear() }
+    }
+
+    /* ------------------------------------------------------------------ */
     /*  Singleton‑обёртка (double-checked locking)                       */
     /* ------------------------------------------------------------------ */
 
@@ -122,9 +214,8 @@ class SecurePrefs private constructor(context: Context) {
 /*  Расширения для работы с Double в SharedPreferences                       */
 /* -------------------------------------------------------------------------- */
 
-private fun SharedPreferences.Editor.putDouble(
+fun SharedPreferences.Editor.putDouble(
     key: String?,
     value: Double
 ): SharedPreferences.Editor =
     putLong(key, java.lang.Double.doubleToRawLongBits(value))
-
