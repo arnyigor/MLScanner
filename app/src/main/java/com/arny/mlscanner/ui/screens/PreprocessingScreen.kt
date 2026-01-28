@@ -1,8 +1,10 @@
 package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +27,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -32,6 +35,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -67,9 +71,21 @@ fun PreprocessingScreen(
     navController: NavHostController
 ) {
     val previewBitmap by viewModel.previewImage.collectAsState()
-    viewModel.capturedBitmap?.let { bitmap ->
+
+    // Логируем состояние при каждой рекомпозиции
+    LaunchedEffect(previewBitmap) {
+        if (previewBitmap == null) {
+            Log.e("PreprocessingScreen", "Preview Bitmap is NULL")
+        } else {
+            Log.d("PreprocessingScreen", "Drawing Bitmap: ${previewBitmap!!.width}x${previewBitmap!!.height}")
+        }
+    }
+    // Если previewBitmap null, попробуем взять оригинал напрямую (failsafe)
+    val displayBitmap = previewBitmap ?: viewModel.capturedBitmap
+
+    if (displayBitmap != null) {
         PreprocessingScreen(
-            previewBitmap = previewBitmap,
+            previewBitmap = displayBitmap,
             onUpdateSettings = viewModel::updateSettings,
             onStartScan = { settings, cropRect ->
                 viewModel.applyCropAndScan(cropRect, settings)
@@ -77,8 +93,15 @@ fun PreprocessingScreen(
             },
             onBack = { navController.popBackStack() }
         )
+    } else {
+        // Показываем лоадер или ошибку, если совсем ничего нет
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+            Text("Processing image...", modifier = Modifier.padding(top = 64.dp))
+        }
     }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

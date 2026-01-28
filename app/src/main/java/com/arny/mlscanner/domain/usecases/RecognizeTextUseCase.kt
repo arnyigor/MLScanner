@@ -27,7 +27,7 @@ class RecognizeTextUseCase(
     ): Result<RecognizedText> = withContext(Dispatchers.Default) {
         try {
             // 1. Предобработка изображения
-            val preprocessedBitmap = preprocessor.preprocessImage(bitmap, settings)
+            val preprocessedBitmap = preprocessor.prepareBaseImage(bitmap, settings)
 
             // 2. Создание InputImage для ML Kit
             val inputImage = InputImage.fromBitmap(preprocessedBitmap, 0)
@@ -45,7 +45,7 @@ class RecognizeTextUseCase(
     }
 
     fun preprocessImage(source: Bitmap, scanSettings: ScanSettings): Bitmap =
-        preprocessor.preprocessImage(source, scanSettings)
+        preprocessor.prepareBaseImage(source, scanSettings)
 }
 
 // Extension для Tasks -> Coroutines

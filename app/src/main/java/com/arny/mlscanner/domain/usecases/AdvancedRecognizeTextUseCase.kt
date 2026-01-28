@@ -29,7 +29,7 @@ class AdvancedRecognizeTextUseCase(
         settings: ScanSettings
     ): OcrResult = withContext(ioDispatcher) {
         // 1. Предобработка изображения
-        val preprocessedBitmap = imagePreprocessor.preprocessImage(bitmap, settings)
+        val preprocessedBitmap = imagePreprocessor.prepareBaseImage(bitmap, settings)
 
         // 2. Распознавание текста с использованием ONNX Runtime
         ocrEngine.recognize(preprocessedBitmap)
@@ -53,5 +53,5 @@ class AdvancedRecognizeTextUseCase(
      * Предобработка изображения
      */
     fun preprocessImage(source: Bitmap, scanSettings: ScanSettings): Bitmap =
-        imagePreprocessor.preprocessImage(source, scanSettings)
+        imagePreprocessor.prepareBaseImage(source, scanSettings)
 }
