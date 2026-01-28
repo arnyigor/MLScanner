@@ -54,239 +54,141 @@ fun CropImageView(
 ) {
     val density = LocalDensity.current
     val primaryColor = MaterialTheme.colorScheme.primary
-    // Полупрозрачный черный для затемнения (Overlay)
     val maskColor = Color.Black.copy(alpha = 0.6f)
 
-    val minCropSizePx = with(density) { 48.dp.toPx() }
+    // Минимальный размер кропа (в пикселях экрана)
+    val minTouchSize = with(density) { 48.dp.toPx() }
 
+    // Размер Canvas на экране
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    val imageSize = IntSize(bitmap.width, bitmap.height)
 
-    // Rect в координатах VIEW (экрана)
-    var viewCropRect by remember { mutableStateOf<Rect?>(null) }
-
-    // 1. Вычисляем параметры отображения картинки (Fit Center)
-    val layoutInfo = remember(canvasSize, imageSize) {
-        if (canvasSize == IntSize.Zero) null else {
-            calculateLayoutInfo(canvasSize, imageSize)
-        }
+    // Состояние кропа в координатах БИТМАПА (0..width, 0..height)
+    // Инициализируем полным размером картинки
+    var cropState by remember(bitmap) {
+        mutableStateOf(
+            Rect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+        )
     }
 
-    // 2. Инициализация кропа ТОЛЬКО ОДИН РАЗ при первом появлении картинки
-    LaunchedEffect(layoutInfo) {
-        if (viewCropRect == null && layoutInfo != null) {
-            // Изначально выделяем всю картинку
-            viewCropRect = Rect(
-                offset = layoutInfo.offset,
-                size = Size(layoutInfo.scaledWidth, layoutInfo.scaledHeight)
-            )
-            // Сообщаем об этом наружу
-            onCropChanged(
-                CropRect(0f, 0f, imageSize.width.toFloat(), imageSize.height.toFloat())
-            )
-        }
+    // Сообщаем родителю об изменении
+    LaunchedEffect(cropState) {
+        onCropChanged(
+            CropRect(cropState.left, cropState.top, cropState.width, cropState.height)
+        )
     }
 
-    // 3. Функция обновления координат при драге
-    fun updateCrop(newRect: Rect) {
-        viewCropRect = newRect
-        layoutInfo?.let { info ->
-            // Конвертация View Coordinates -> Bitmap Coordinates
-            val bitmapLeft = (newRect.left - info.offset.x) / info.scale
-            val bitmapTop = (newRect.top - info.offset.y) / info.scale
-            val bitmapWidth = newRect.width / info.scale
-            val bitmapHeight = newRect.height / info.scale
-
-            onCropChanged(
-                CropRect(
-                    left = bitmapLeft.coerceIn(0f, imageSize.width.toFloat()),
-                    top = bitmapTop.coerceIn(0f, imageSize.height.toFloat()),
-                    width = bitmapWidth.coerceAtLeast(1f),
-                    height = bitmapHeight.coerceAtLeast(1f)
-                )
-            )
-        }
+    // Вычисляем параметры отображения (FitCenter)
+    val layoutInfo = remember(canvasSize, bitmap) {
+        if (canvasSize == IntSize.Zero) null else calculateLayoutInfo(canvasSize, IntSize(bitmap.width, bitmap.height))
     }
 
     Box(
         modifier = modifier
-            .clipToBounds()
+            .fillMaxSize()
             .onGloballyPositioned { coordinates ->
                 canvasSize = coordinates.size
             }
     ) {
-        // Слой рисования: Картинка + Затемнение + Рамка
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            layoutInfo?.let { info ->
-                // A. Рисуем картинку
+        layoutInfo?.let { info ->
+            // Конвертация Bitmap Rect -> Screen Rect
+            val screenRect = Rect(
+                left = info.offset.x + cropState.left * info.scale,
+                top = info.offset.y + cropState.top * info.scale,
+                right = info.offset.x + cropState.right * info.scale,
+                bottom = info.offset.y + cropState.bottom * info.scale
+            )
+
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                // 1. Рисуем картинку
                 drawImage(
                     image = bitmap,
                     dstOffset = IntOffset(info.offset.x.roundToInt(), info.offset.y.roundToInt()),
                     dstSize = IntSize(info.scaledWidth.roundToInt(), info.scaledHeight.roundToInt())
                 )
 
-                viewCropRect?.let { rect ->
-                    // B. Рисуем затемнение вокруг прямоугольника (4 прямоугольника)
-                    // Это решает проблему с BlendMode.Clear, который стирал картинку
+                // 2. Затемнение (Mask)
+                // Верх
+                drawRect(maskColor, Offset(0f, 0f), Size(size.width, screenRect.top))
+                // Низ
+                drawRect(maskColor, Offset(0f, screenRect.bottom), Size(size.width, size.height - screenRect.bottom))
+                // Лево
+                drawRect(maskColor, Offset(0f, screenRect.top), Size(screenRect.left, screenRect.height))
+                // Право
+                drawRect(maskColor, Offset(screenRect.right, screenRect.top), Size(size.width - screenRect.right, screenRect.height))
 
-                    // Верх
-                    drawRect(
-                        color = maskColor,
-                        topLeft = Offset(0f, 0f),
-                        size = Size(size.width, rect.top)
-                    )
-                    // Низ
-                    drawRect(
-                        color = maskColor,
-                        topLeft = Offset(0f, rect.bottom),
-                        size = Size(size.width, size.height - rect.bottom)
-                    )
-                    // Лево (между верхом и низом)
-                    drawRect(
-                        color = maskColor,
-                        topLeft = Offset(0f, rect.top),
-                        size = Size(rect.left, rect.height)
-                    )
-                    // Право (между верхом и низом)
-                    drawRect(
-                        color = maskColor,
-                        topLeft = Offset(rect.right, rect.top),
-                        size = Size(size.width - rect.right, rect.height)
-                    )
+                // 3. Рамка
+                drawRect(
+                    color = primaryColor,
+                    topLeft = screenRect.topLeft,
+                    size = screenRect.size,
+                    style = Stroke(width = 3.dp.toPx())
+                )
 
-                    // C. Рисуем рамку кропа
-                    drawRect(
-                        color = primaryColor,
-                        topLeft = rect.topLeft,
-                        size = rect.size,
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-
-                    // D. Рисуем сетку (Grid) 3x3
-                    val thirdW = rect.width / 3
-                    val thirdH = rect.height / 3
-
-                    // Вертикальные линии
-                    drawLine(
-                        primaryColor.copy(0.5f),
-                        Offset(rect.left + thirdW, rect.top),
-                        Offset(rect.left + thirdW, rect.bottom)
-                    )
-                    drawLine(
-                        primaryColor.copy(0.5f),
-                        Offset(rect.left + thirdW * 2, rect.top),
-                        Offset(rect.left + thirdW * 2, rect.bottom)
-                    )
-                    // Горизонтальные линии
-                    drawLine(
-                        primaryColor.copy(0.5f),
-                        Offset(rect.left, rect.top + thirdH),
-                        Offset(rect.right, rect.top + thirdH)
-                    )
-                    drawLine(
-                        primaryColor.copy(0.5f),
-                        Offset(rect.left, rect.top + thirdH * 2),
-                        Offset(rect.right, rect.top + thirdH * 2)
-                    )
+                // 4. Сетка
+                val thirdW = screenRect.width / 3
+                val thirdH = screenRect.height / 3
+                if (screenRect.width > 20 && screenRect.height > 20) {
+                    drawLine(primaryColor.copy(0.5f), Offset(screenRect.left + thirdW, screenRect.top), Offset(screenRect.left + thirdW, screenRect.bottom))
+                    drawLine(primaryColor.copy(0.5f), Offset(screenRect.left + thirdW * 2, screenRect.top), Offset(screenRect.left + thirdW * 2, screenRect.bottom))
+                    drawLine(primaryColor.copy(0.5f), Offset(screenRect.left, screenRect.top + thirdH), Offset(screenRect.right, screenRect.top + thirdH))
+                    drawLine(primaryColor.copy(0.5f), Offset(screenRect.left, screenRect.top + thirdH * 2), Offset(screenRect.right, screenRect.top + thirdH * 2))
                 }
             }
-        }
 
-        // Слой управления (Handles)
-        viewCropRect?.let { rect ->
-            layoutInfo?.let { info ->
-                val bounds = Rect(info.offset, Size(info.scaledWidth, info.scaledHeight))
+            // --- HANDLES (Управление) ---
+            // Функция обновления координат в БИТМАПЕ
+            fun updateCropInBitmapCoords(newRect: Rect) {
+                // Ограничиваем границами битмапа
+                val clamped = Rect(
+                    left = newRect.left.coerceIn(0f, bitmap.width.toFloat()),
+                    top = newRect.top.coerceIn(0f, bitmap.height.toFloat()),
+                    right = newRect.right.coerceIn(0f, bitmap.width.toFloat()),
+                    bottom = newRect.bottom.coerceIn(0f, bitmap.height.toFloat())
+                )
+                // Проверка на минимальный размер (чтобы не схлопнулось в 0)
+                // Минимальный размер в пикселях картинки, который соответствует ~48dp на экране
+                val minW = minTouchSize / info.scale
+                val minH = minTouchSize / info.scale
 
-                fun safeClamp(value: Float, min: Float, max: Float): Float {
-                    return if (min > max) min else value.coerceIn(min, max)
+                if (clamped.width >= minW && clamped.height >= minH) {
+                    cropState = clamped
                 }
+            }
 
-                // Top Left
-                CropHandle(
-                    offset = rect.topLeft,
-                    onDrag = { change ->
-                        val newLeft =
-                            safeClamp(rect.left + change.x, bounds.left, rect.right - minCropSizePx)
-                        val newTop =
-                            safeClamp(rect.top + change.y, bounds.top, rect.bottom - minCropSizePx)
-                        updateCrop(
-                            Rect(
-                                left = newLeft,
-                                top = newTop,
-                                right = rect.right,
-                                bottom = rect.bottom
-                            )
-                        )
-                    }
+            // Top-Left Handle
+            CropHandle(offset = screenRect.topLeft) { drag ->
+                // drag в пикселях экрана -> делим на scale -> пиксели битмапа
+                val dx = drag.x / info.scale
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(
+                    Rect(cropState.left + dx, cropState.top + dy, cropState.right, cropState.bottom)
                 )
+            }
 
-                // Top Right
-                CropHandle(
-                    offset = rect.topRight,
-                    onDrag = { change ->
-                        val newRight = safeClamp(
-                            rect.right + change.x,
-                            rect.left + minCropSizePx,
-                            bounds.right
-                        )
-                        val newTop =
-                            safeClamp(rect.top + change.y, bounds.top, rect.bottom - minCropSizePx)
-                        updateCrop(
-                            Rect(
-                                left = rect.left,
-                                top = newTop,
-                                right = newRight,
-                                bottom = rect.bottom
-                            )
-                        )
-                    }
+            // Top-Right Handle
+            CropHandle(offset = screenRect.topRight) { drag ->
+                val dx = drag.x / info.scale
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(
+                    Rect(cropState.left, cropState.top + dy, cropState.right + dx, cropState.bottom)
                 )
+            }
 
-                // Bottom Left
-                CropHandle(
-                    offset = rect.bottomLeft,
-                    onDrag = { change ->
-                        val newLeft =
-                            safeClamp(rect.left + change.x, bounds.left, rect.right - minCropSizePx)
-                        val newBottom = safeClamp(
-                            rect.bottom + change.y,
-                            rect.top + minCropSizePx,
-                            bounds.bottom
-                        )
-                        updateCrop(
-                            Rect(
-                                left = newLeft,
-                                top = rect.top,
-                                right = rect.right,
-                                bottom = newBottom
-                            )
-                        )
-                    }
+            // Bottom-Left Handle
+            CropHandle(offset = screenRect.bottomLeft) { drag ->
+                val dx = drag.x / info.scale
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(
+                    Rect(cropState.left + dx, cropState.top, cropState.right, cropState.bottom + dy)
                 )
+            }
 
-                // Bottom Right
-                CropHandle(
-                    offset = rect.bottomRight,
-                    onDrag = { change ->
-                        val newRight = safeClamp(
-                            rect.right + change.x,
-                            rect.left + minCropSizePx,
-                            bounds.right
-                        )
-                        val newBottom = safeClamp(
-                            rect.bottom + change.y,
-                            rect.top + minCropSizePx,
-                            bounds.bottom
-                        )
-                        updateCrop(
-                            Rect(
-                                left = rect.left,
-                                top = rect.top,
-                                right = newRight,
-                                bottom = newBottom
-                            )
-                        )
-                    }
+            // Bottom-Right Handle
+            CropHandle(offset = screenRect.bottomRight) { drag ->
+                val dx = drag.x / info.scale
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(
+                    Rect(cropState.left, cropState.top, cropState.right + dx, cropState.bottom + dy)
                 )
             }
         }
@@ -298,8 +200,7 @@ fun CropHandle(
     offset: Offset,
     onDrag: (Offset) -> Unit
 ) {
-    val hitSize = 48.dp // Увеличил область нажатия
-    val dotSize = 16.dp
+    val hitSize = 48.dp
     val density = LocalDensity.current
     val hitSizePx = with(density) { hitSize.toPx() }
 
@@ -322,22 +223,15 @@ fun CropHandle(
     ) {
         Box(
             modifier = Modifier
-                .size(dotSize)
+                .size(16.dp)
                 .background(MaterialTheme.colorScheme.primary, CircleShape)
-                .background(Color.White.copy(0.2f), CircleShape)
+                .background(Color.White.copy(0.5f), CircleShape)
         )
     }
 }
 
-// Helpers
-data class LayoutInfo(
-    val offset: Offset,
-    val scale: Float,
-    val scaledWidth: Float,
-    val scaledHeight: Float
-)
-
-fun calculateLayoutInfo(canvasSize: IntSize, imageSize: IntSize): LayoutInfo {
+// Повтор хелпера (можно оставить старый, если он есть)
+private fun calculateLayoutInfo(canvasSize: IntSize, imageSize: IntSize): LayoutInfo {
     val scaleX = canvasSize.width.toFloat() / imageSize.width
     val scaleY = canvasSize.height.toFloat() / imageSize.height
     val scale = min(scaleX, scaleY)
@@ -355,3 +249,11 @@ fun calculateLayoutInfo(canvasSize: IntSize, imageSize: IntSize): LayoutInfo {
         scaledHeight = scaledHeight
     )
 }
+
+// Helpers
+data class LayoutInfo(
+    val offset: Offset,
+    val scale: Float,
+    val scaledWidth: Float,
+    val scaledHeight: Float
+)
