@@ -32,10 +32,12 @@ navigation3Runtime = "1.0.0"
 navigation3Ui = "1.0.0"
 ktor = "3.3.3"
 kotlinx-coroutines = "1.10.2"
+sqlcipherAndroid = "4.5.0"
+sqliteKtx = "2.6.2"
 textRecognition = "16.0.0"
 onnxRuntime = "1.23.2"
 pdfboxAndroid = "2.0.27.0"  # Обновлено до стабильной версии
-sqlcipher = "4.5.4"     # Обновлено до нового артефакта
+sqlcipher = "4.12.0"     # Обновлено до нового артефакта
 fuzzywuzzy = "1.4.0"
 opencsv = "5.12.0"
 navigationRuntimeKtx = "2.9.6"
@@ -50,6 +52,7 @@ androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation", version.ref = "foundation" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
+androidx-sqlite-ktx = { module = "androidx.sqlite:sqlite-ktx", version.ref = "sqliteKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }

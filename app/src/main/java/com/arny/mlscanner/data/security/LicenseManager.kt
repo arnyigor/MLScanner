@@ -2,19 +2,21 @@ package com.arny.mlscanner.data.security
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.media.MediaDrm
 import android.os.Build
-import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresApi
 import org.json.JSONObject
 import java.io.File
 import java.nio.charset.Charset
-import java.security.*
+import java.security.KeyFactory
+import java.security.KeyStore
+import java.security.PublicKey
+import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -37,7 +39,8 @@ class LicenseManager(
     /* ------------------------------------------------------------------ */
 
     /** Поставщик уникального ID устройства – можно переопределить в тестах. */
-    internal var deviceIdProvider: () -> String = { generateDeviceId() }
+    private val _deviceIdentityProvider by lazy { DeviceIdentityProvider(context) }
+    internal var deviceIdProvider: () -> String = { _deviceIdentityProvider.getDeviceId() }
 
     /**
      * Поставщик публичного RSA‑ключа.
@@ -65,43 +68,6 @@ class LicenseManager(
      */
     fun currentDeviceId(): String = deviceIdProvider()
 
-    @SuppressLint("HardwareIds")
-    private fun generateDeviceId(): String {
-        return try {
-            // Widevine UUID, который можно использовать на всех версиях ≥ Lollipop.
-            val widevineUuid =
-                UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
-
-            val idBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                MediaDrm(widevineUuid).use { drm ->
-                    drm.getPropertyByteArray(MediaDrm.PROPERTY_DEVICE_UNIQUE_ID)
-                }
-            } else {
-                // Fallback‑путь для SDK < 28.
-                // Android‑ID считается достаточным уникальным идентификатором
-                // (и присутствует уже с API 3). Если вдруг он не существует,
-                // генерируем случайный UUID и используем его как резервный вариант.
-                val androidId = Settings.Secure
-                    .getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-                (androidId ?: UUID.randomUUID().toString())
-                    .toByteArray(Charset.defaultCharset())
-            }
-
-            // Хэшируем, чтобы получить фиксированную длину и не раскрывать
-            // оригинальный идентификатор.
-            MessageDigest.getInstance("SHA-256")
-                .digest(idBytes)
-                .joinToString("") { "%02x".format(it) }
-        } catch (e: Exception) {
-            // Бэкапы:
-            // 1. Android‑ID, если MediaDrm недоступен или бросил исключение.
-            // 2. Фиксированная строка «unknown», чтобы не возвращать пустую
-            //    или некорректную ID в продакшн‑кода.
-            Settings.Secure
-                .getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-                ?: "unknown"
-        }
-    }
 
     /* ------------------------------------------------------------------ */
     /*  Шифрование / Расшифровка                                          */

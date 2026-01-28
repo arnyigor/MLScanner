@@ -70,7 +70,7 @@ class PdfRedactionEngine {
             val pdImage = LosslessFactory.createFromImage(doc, sourceBitmap)
             contentStream.drawImage(pdImage, startX, startY, drawnWidth, drawnHeight)
 
-            // Add non‑redacted text layers
+                    // Add non‑redacted text layers (invisible layer)
             val font = PDType1Font.HELVETICA
             contentStream.setFont(font, 12f * scale)
             for (textBox in textBoxes) {
@@ -109,6 +109,59 @@ class PdfRedactionEngine {
         } finally {
             doc?.close()
             sourceBitmap?.recycle()
+        }
+    }
+
+    /**
+     * Removes text operators (Tj/TJ) from an existing PDF while keeping black rectangles.
+     */
+    fun redactExistingPdf(
+        sourcePath: String,
+        redactionMask: RedactionMask,
+        outputPath: String
+    ): Boolean {
+        var doc: PDDocument? = null
+        return try {
+            val file = java.io.File(sourcePath)
+            if (!file.exists()) throw IllegalArgumentException("File not found: $sourcePath")
+            doc = PDDocument.load(file)
+
+            for (page in doc.pages) {
+                // Parse the content stream of the page
+                val parser = com.tom_roush.pdfbox.util.PDFStreamParser(page.contents)
+                val tokens = parser.parse()
+
+                val newTokens = mutableListOf<Any>()
+                var i = 0
+                while (i < tokens.size) {
+                    val token = tokens[i]
+                    if (token is com.tom_roush.pdfbox.cos.COSName &&
+                        (token.name.equals("Tj", ignoreCase = true) ||
+                                token.name.equals("TJ", ignoreCase = true))) {
+                        // Skip the text operator and its preceding operand
+                        i += 1 // skip operator
+                    } else {
+                        newTokens.add(token)
+                        i += 1
+                    }
+                }
+
+                val outputStream = java.io.ByteArrayOutputStream()
+                val writer = com.tom_roush.pdfbox.cos.COSWriter(outputStream, true)
+                for (t in newTokens) {
+                    writer.write(t)
+                }
+                writer.close()
+                page.contents = com.tom_roush.pdfbox.pdmodel.PDStream(doc, java.io.ByteArrayInputStream(outputStream.toByteArray()))
+            }
+
+            doc.save(outputPath)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during PDF redaction", e)
+            false
+        } finally {
+            doc?.close()
         }
     }
 

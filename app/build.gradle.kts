@@ -5,7 +5,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    kotlin("kapt")
     id("com.google.devtools.ksp")
     alias(libs.plugins.android.room)
     alias(libs.plugins.kotlin.serialization)
@@ -152,11 +151,6 @@ android {
         jvmTarget = "17"
     }
 
-    kapt {
-        correctErrorTypes = true
-        useBuildCache = true
-    }
-
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
@@ -227,23 +221,23 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.navigation.runtime.ktx)
     ksp(libs.androidx.room.compiler)
-            implementation("net.zetetic:android-database-sqlcipher:4.5.4")
-            implementation("androidx.sqlite:sqlite-ktx:2.1.0")
+    implementation(libs.androidx.sqlite.ktx)
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
-    
+
     // Новые зависимости для SecureField MVP
     // ONNX Runtime для локального OCR
     implementation(libs.onnxruntime)
 
     // PDFBox для работы с PDF
     implementation(libs.pdfbox.android)
-    
+    implementation("net.zetetic:sqlcipher-android:4.12.0@aar")
+    implementation("androidx.sqlite:sqlite:2.2.0")
     // SQLCipher для шифрования БД
     implementation(libs.sqlcipher)
-    
+
     // FuzzyWuzzy для fuzzy-поиска
     implementation(libs.fuzzywuzzy)
-    
+
     // OpenCSV для импорта CSV
     implementation(libs.opencsv)
 

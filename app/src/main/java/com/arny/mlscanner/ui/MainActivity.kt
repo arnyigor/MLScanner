@@ -1,6 +1,9 @@
 package com.arny.mlscanner.ui
 
 import android.os.Bundle
+import com.arny.mlscanner.data.security.RootChecker
+import android.widget.Toast
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,8 +23,16 @@ import com.arny.mlscanner.ui.theme.AndroidComposeTemplateTheme
 import org.koin.androidx.compose.koinViewModel
 
 class MainActivity : ComponentActivity() {
+    private fun showSecurityBlockScreen(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        finish()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (RootChecker.isDeviceRooted() || RootChecker.isDebuggerConnected()) {
+            showSecurityBlockScreen("Root-доступ обнаружен. Приложение не может работать на модифицированных устройствах.")
+            return
+        }
         enableEdgeToEdge()
         setContent {
             AndroidComposeTemplateTheme {

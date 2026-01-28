@@ -1,12 +1,13 @@
 package com.arny.mlscanner.data.db
 
+import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import android.content.Context
 import com.arny.mlscanner.data.prefs.SecurePrefs
-import net.sqlcipher.database.SQLiteDatabase  // ← This is critical
-import net.sqlcipher.database.SupportFactory
+import net.zetetic.database.sqlcipher.SQLiteDatabase
+// Enable SQLCipher support in Room via SupportFactory
+import net.zetetic.database.sqlcipher.support.SupportFactory
 
 @Database(
     entities = [ProductEntity::class, ProductFtsEntity::class],
@@ -35,7 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     securePrefs.saveSecureString(keyAlias, keyString)
                 }
-
+                // Create a SupportFactory with the generated key
                 val key = SQLiteDatabase.getBytes(keyString.toCharArray())
                 val factory = SupportFactory(key)
 

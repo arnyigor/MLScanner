@@ -10,6 +10,7 @@ class MlScannerApp: Application() {
         super.onCreate()
 
         System.loadLibrary("opencv_java4")
+        System.loadLibrary("sqlcipher")
 
         startKoin {
             // 1️⃣ Android context (необходим для кода, зависящего от контекста)

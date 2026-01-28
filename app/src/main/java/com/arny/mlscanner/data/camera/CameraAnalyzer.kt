@@ -3,10 +3,18 @@ package com.arny.mlscanner.data.camera
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.Log
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.arny.mlscanner.data.ocr.OcrEngine
 import com.arny.mlscanner.domain.models.OcrResult
+import kotlinx.coroutines.cancel
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraAnalyzer(
@@ -20,46 +28,53 @@ class CameraAnalyzer(
     }
 
     private val isProcessing = AtomicBoolean(false)
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val rotationMatrix = Matrix()
 
     // Метод будет вызван в фоновом потоке, который мы передадим в setAnalyzer
     override fun analyze(imageProxy: ImageProxy) {
-        // Если обработка занята, пропускаем кадр
-        if (isProcessing.get()) {
+        // Skip frame if already processing
+        if (isProcessing.getAndSet(true)) {
             imageProxy.close()
             return
         }
 
-        try {
-            isProcessing.set(true)
+        scope.launch {
+            try {
+                // Heavy work in IO dispatcher
+                val correctedBitmap = withContext(ioDispatcher) {
+                    val bitmap = imageProxy.toBitmap()
+                    val rotation = imageProxy.imageInfo.rotationDegrees
+                    if (rotation != 0) rotateBitmap(bitmap, rotation) else bitmap
+                }
 
-            // 1. Конвертация (тяжелая операция)
-            val bitmap = imageProxy.toBitmap()
+                // Close proxy after conversion & rotation to free buffer
+                imageProxy.close()
 
-            // 2. Поворот (тяжелая операция)
-            val rotation = imageProxy.imageInfo.rotationDegrees
-            val correctedBitmap = if (rotation != 0) {
-                rotateBitmap(bitmap, rotation)
-            } else {
-                bitmap
+                // OCR recognition on IO dispatcher
+                val result = withContext(ioDispatcher) {
+                    ocrEngine.recognize(correctedBitmap)
+                }
+
+                // Deliver result on Main thread
+                withContext(Dispatchers.Main) {
+                    onOcrResult(result)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Analysis failed", e)
+                withContext(Dispatchers.Main) {
+                    onError(e)
+                }
+            } finally {
+                isProcessing.set(false)
             }
-
-            // Proxy больше не нужен, закрываем его, чтобы CameraX могла слать новые кадры
-            imageProxy.close()
-
-            // 3. Распознавание
-            val result = ocrEngine.recognize(correctedBitmap)
-            onOcrResult(result)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Analysis failed", e)
-            onError(e)
-        } finally {
-            isProcessing.set(false)
         }
     }
 
-private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+    fun shutdown() = scope.cancel()
+
+    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
         rotationMatrix.reset()
         rotationMatrix.postRotate(rotationDegrees.toFloat())
         return Bitmap.createBitmap(
