@@ -10,6 +10,7 @@ import com.arny.mlscanner.data.ocr.TextFormatPreserver
 import com.arny.mlscanner.data.pdf.PdfRedactionEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.data.security.LicenseManager
+import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 val dataModule = module {
@@ -19,7 +20,7 @@ val dataModule = module {
     single { ImagePreprocessor() }
     single { TextFormatPreserver() }
     single { OcrEngine(get()) }
-    single { PdfRedactionEngine() }
+    single { PdfRedactionEngine(androidContext()) }
     single { MatchingEngine(get()) }
     single { LicenseManager(get()) }
 }

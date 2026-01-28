@@ -1,13 +1,14 @@
 package com.arny.mlscanner.data.db
 
 import android.content.Context
+import android.util.Base64
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.arny.mlscanner.data.prefs.SecurePrefs
-import net.zetetic.database.sqlcipher.SQLiteDatabase
-// Enable SQLCipher support in Room via SupportFactory
-import net.zetetic.database.sqlcipher.support.SupportFactory
+// Импорт правильной фабрики
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import java.security.SecureRandom
 
 @Database(
     entities = [ProductEntity::class, ProductFtsEntity::class],
@@ -29,23 +30,28 @@ abstract class AppDatabase : RoomDatabase() {
                 var keyString = securePrefs.getSecureString(keyAlias, "")
                 if (keyString.isEmpty()) {
                     val randomBytes = ByteArray(32)
-                    java.security.SecureRandom().nextBytes(randomBytes)
-                    keyString = android.util.Base64.encodeToString(
+                    SecureRandom().nextBytes(randomBytes)
+                    // Генерируем ключ и сохраняем как Base64 строку
+                    keyString = Base64.encodeToString(
                         randomBytes,
-                        android.util.Base64.NO_WRAP
+                        Base64.NO_WRAP
                     )
                     securePrefs.saveSecureString(keyAlias, keyString)
                 }
-                // Create a SupportFactory with the generated key
-                val key = SQLiteDatabase.getBytes(keyString.toCharArray())
-                val factory = SupportFactory(key)
+
+                // ИСПРАВЛЕНИЕ:
+                // 1. Используем стандартный toByteArray() вместо приватного SQLiteDatabase.getBytes
+                val passphrase = keyString.toByteArray()
+
+                // 2. Используем правильное имя класса: SupportOpenHelperFactory
+                val factory = SupportOpenHelperFactory(passphrase)
 
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "product_database"
                 )
-                    .openHelperFactory(factory) // Enable SQLCipher encryption
+                    .openHelperFactory(factory) // Включаем шифрование SQLCipher
                     .fallbackToDestructiveMigration()
                     .build()
 
