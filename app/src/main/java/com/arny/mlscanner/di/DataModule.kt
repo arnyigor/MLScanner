@@ -17,7 +17,7 @@ val dataModule = module {
     single { Prefs.getInstance(get()) }
     single { SecurePrefs.getInstance(get()) }
     single<CoroutineDispatcher> { Dispatchers.IO }   // можно вынести в отдельный модуль
-    single { ImagePreprocessor() }
+    single { ImagePreprocessor(context = androidContext()) }
     single { TextFormatPreserver() }
     single { TesseractEngine(androidContext()) }
     single { PdfRedactionEngine(androidContext()) }

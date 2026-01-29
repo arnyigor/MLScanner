@@ -1,111 +1,144 @@
 package com.arny.mlscanner.data.preprocessing
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.arny.mlscanner.domain.models.ScanSettings
+import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.CvType
-import org.opencv.core.Mat
-import org.opencv.core.Point
+import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.abs
 
+// --- DUMMY CLASSES ДЛЯ ИЗОЛЯЦИИ СБОЕВ DocumentDetector ---
+data class Quadrilateral(
+    val points: Array<org.opencv.core.Point>,
+    val isValid: Boolean = points.size == 4
+)
+class DocumentDetector {
+    fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? { return null }
+    fun correctPerspective(bitmap: Bitmap, quadrilateral: Quadrilateral?): Bitmap? { return null }
+}
+// --- КОНЕЦ DUMMY CLASSES ---
+
 class ImagePreprocessor(
+    private val context: Context,
     private val documentDetector: DocumentDetector = DocumentDetector()
 ) {
 
+    private var currentAngleDeg = 0.0
+
     companion object {
         private const val TAG = "ImagePreprocessor"
+
+        init {
+            if (!OpenCVLoader.initDebug()) {
+                Log.e(TAG, "OpenCV initialization failed")
+            }
+        }
+
+        private fun saveBitmapForDebug(context: Context, bitmap: Bitmap, name: String) {
+            try {
+                // Используем filesDir, чтобы избежать проблем с внешним хранилищем
+                val file = File(context.filesDir, name)
+                FileOutputStream(file).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                Log.d(TAG, "Saved debug image: ${file.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save debug image: $name", e)
+            }
+        }
     }
 
+    /* ------------------------------------------------------------------- *
+     *  Public API                                                         *
+     * ------------------------------------------------------------------- */
+
     /**
-     * Полный цикл: Геометрия (Perspective/Deskew) + Фильтры.
-     * Используется перед финальным OCR.
+     * Полный pipeline, объединяющий геометрию (изолированную) и фильтрацию.
      */
     fun prepareBaseImage(bitmap: Bitmap, settings: ScanSettings): Bitmap {
         if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
 
-        val sourceBitmap = if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val sourceBitmap =
+            if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-        // 1. Геометрия
+        saveBitmapForDebug(context, sourceBitmap, "01_original_camera.png")
+
+        // 1. Геометрия (DocumentDetector изолирован, чтобы не падать)
         val geomProcessed: Bitmap = try {
-            val docCorrected = if (settings.detectDocument) {
-                correctPerspective(sourceBitmap)
-            } else {
-                sourceBitmap
-            }
-            if (settings.autoRotateEnabled) deskew(docCorrected) else docCorrected
-        } catch (e: Exception) {
-            Log.w(TAG, "Geometry stage failed", e)
-            sourceBitmap
-        }
+            val docCorrected = sourceBitmap // Пропускаем коррекцию перспективы
 
-        // 2. Фильтры
-        return applyFiltersOnly(geomProcessed, settings)
+            saveBitmapForDebug(context, docCorrected, "02_after_geometry_skip.png")
+
+            val deskewed = if (settings.autoRotateEnabled) deskew(docCorrected) else docCorrected
+            deskewed
+        } catch (e: Exception) {
+            Log.e(TAG, "FATAL GEOMETRY CRASH - Check OpenCV Init/Permissions", e)
+            return sourceBitmap
+        }
+        saveBitmapForDebug(context, geomProcessed, "03_after_deskew_isolation.png")
+
+        // 2. Фильтрация
+        val finalProcessedBitmap = applyFiltersInternal(geomProcessed, settings)
+        saveBitmapForDebug(context, finalProcessedBitmap, "04_final_preprocessed.png")
+        return finalProcessedBitmap
     }
 
     /**
-     * ТОЛЬКО Фильтры (Яркость, Контраст, Шум, Бинаризация).
-     * Используется для Live Preview во ViewModel.
-     * Не меняет геометрию (размер/угол).
+     * Только фильтры (для Live Preview во ViewModel).
      */
     fun applyFiltersOnly(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
+        return applyFiltersInternal(baseBitmap, settings)
+    }
+
+    /* ------------------------------------------------------------------- *
+     *  Внутренние Helpers (Core Logic)                                   *
+     * ------------------------------------------------------------------- */
+
+    private fun applyFiltersInternal(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
         val mat = Mat()
         try {
             Utils.bitmapToMat(baseBitmap, mat)
             val gray = Mat()
 
             try {
-                // Конвертация в Grayscale
                 if (mat.channels() == 1) {
                     mat.copyTo(gray)
                 } else {
                     Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
                 }
 
-                // 1. Denoise
                 if (settings.denoiseEnabled) {
                     val temp = Mat()
-                    // Bilateral filter медленный, для превью можно использовать GaussianBlur для скорости
-                    // Imgproc.GaussianBlur(gray, temp, org.opencv.core.Size(3.0, 3.0), 0.0)
-                    // Но для качества оставим Bilateral
                     Imgproc.bilateralFilter(gray, temp, 5, 75.0, 75.0)
                     temp.copyTo(gray)
                     temp.release()
                 }
 
-                // 2. Contrast & Brightness
-                // alpha = contrast (1.0-3.0), beta = brightness (0-100)
                 val contrast = settings.contrastLevel ?: 1.0f
                 val brightness = settings.brightnessLevel ?: 0f
 
                 if (contrast != 1.0f || brightness != 0f) {
-                    // convertTo: dst = src * alpha + beta
+                    // dst = src * alpha + beta
                     gray.convertTo(gray, -1, contrast.toDouble(), brightness.toDouble())
                 }
 
-                // 3. Sharpen
                 val sharpenLevel = settings.sharpenLevel ?: 0f
                 if (sharpenLevel > 0f) {
                     sharpen(gray, sharpenLevel)
                 }
 
-                // 4. Binarization
                 if (settings.binarizationEnabled) {
-                    // Используем Adaptive Threshold для документов с тенями
                     Imgproc.adaptiveThreshold(
-                        gray,
-                        gray,
-                        255.0,
-                        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
-                        Imgproc.THRESH_BINARY,
-                        15, // Block size (должен быть нечетным)
-                        10.0 // C constant
+                        gray, gray, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY, 15, 10.0
                     )
                 }
 
-                // Convert back to Bitmap
                 val result = createBitmap(gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888)
                 Utils.matToBitmap(gray, result)
                 return result
@@ -121,24 +154,67 @@ class ImagePreprocessor(
         }
     }
 
-    // --- Внутренние методы ---
-
-    private fun correctPerspective(source: Bitmap): Bitmap {
-        return try {
-            val quadrilateral = documentDetector.detectDocumentQuadrilateral(source)
-            documentDetector.correctPerspective(source, quadrilateral) ?: source
+    /**
+     * Коррекция наклона (Deskew)
+     */
+    private fun deskew(source: Bitmap): Bitmap {
+        val mat = Mat()
+        try {
+            Utils.bitmapToMat(source, mat)
+            if (detectSkew(mat)) {
+                val center = Point(mat.cols() / 2.0, mat.rows() / 2.0)
+                val rotMat = Imgproc.getRotationMatrix2D(center, currentAngleDeg, 1.0)
+                try {
+                    Imgproc.warpAffine(mat, mat, rotMat, mat.size())
+                } finally {
+                    rotMat.release()
+                }
+            }
+            val result = createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(mat, result)
+            return result
         } catch (e: Exception) {
-            source
+            Log.w(TAG, "Deskew failed", e)
+            return source
+        } finally {
+            mat.release()
         }
     }
 
-    private fun deskew(source: Bitmap): Bitmap {
-        // ... (код deskew из вашего исходного файла) ...
-        // Для краткости я его пропускаю, если он у вас уже есть, оставьте его.
-        // Если нет, верните source.
-        return source
+    /**
+     * Детекция угла наклона
+     */
+    private fun detectSkew(mat: Mat): Boolean {
+        val edges = Mat()
+        try {
+            Imgproc.Canny(mat, edges, 50.0, 150.0)
+            val lines = Mat()
+            try {
+                Imgproc.HoughLines(edges, lines, 1.0, Math.PI / 180, 100)
+                if (lines.rows() == 0) return false
+                var angleSum = 0.0
+                val count = lines.rows().coerceAtMost(10)
+                for (i in 0 until count) {
+                    val rhoTheta = lines.get(i, 0)
+                    angleSum += rhoTheta[1]
+                }
+                val avgThetaRad = angleSum / count
+                currentAngleDeg = Math.toDegrees(avgThetaRad) - 90.0
+                return abs(currentAngleDeg) > 0.5 && abs(currentAngleDeg) < 45
+            } finally {
+                lines.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Skew detection failed", e)
+            return false
+        } finally {
+            edges.release()
+        }
     }
 
+    /**
+     * Резкость (Sharpen)
+     */
     private fun sharpen(mat: Mat, level: Float) {
         val kernel = Mat(3, 3, CvType.CV_32F)
         val center = 5f + level

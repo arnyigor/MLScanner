@@ -27,7 +27,13 @@ class ScanViewModel(
     // Кэш уменьшенной копии (для быстрого UI)
     private var cachedGeometryBitmap: Bitmap? = null
 
-    var scanSettings: ScanSettings = ScanSettings()
+    var scanSettings: ScanSettings = ScanSettings(
+        denoiseEnabled = false,
+        binarizationEnabled = false,
+        contrastLevel = 1.0f,
+        brightnessLevel = 0f,
+        sharpenLevel = 0f
+    )
         private set
 
     private val _previewImage = MutableStateFlow<Bitmap?>(null)

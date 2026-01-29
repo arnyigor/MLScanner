@@ -20,7 +20,7 @@ import androidx.core.graphics.createBitmap
  * - Выпрямление перспективы (Document De-Skew)
  * - Поддержка разных форматов документов
  */
-class DocumentDetector {
+class DocumentDetectorBack {
     companion object {
         private const val TAG = "DocumentDetector"
         
@@ -261,7 +261,7 @@ class DocumentDetector {
 /**
  * Класс для представления четырехугольника документа
  */
-data class Quadrilateral(
+data class QuadrilateralBack(
     val points: Array<org.opencv.core.Point>,
     val isValid: Boolean = points.size == 4
 ) {

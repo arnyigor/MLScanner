@@ -113,8 +113,8 @@ fun PreprocessingScreen(
     var contrastLevel by remember { mutableFloatStateOf(1.0f) }
     var brightnessLevel by remember { mutableFloatStateOf(0f) }
     var sharpenLevel by remember { mutableFloatStateOf(0f) }
-    var denoiseEnabled by remember { mutableStateOf(true) }
-    var binarizationEnabled by remember { mutableStateOf(true) }
+    var denoiseEnabled by remember { mutableStateOf(false) }
+    var binarizationEnabled by remember { mutableStateOf(false) }
     var autoRotateEnabled by remember { mutableStateOf(true) }
     var cropRect by remember { mutableStateOf<CropRect?>(null) }
 
