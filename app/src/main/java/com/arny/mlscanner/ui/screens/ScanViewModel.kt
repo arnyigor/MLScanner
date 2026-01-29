@@ -1,6 +1,7 @@
 package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
@@ -123,6 +124,7 @@ class ScanViewModel(
             try {
                 val result = recognizeTextUseCase.execute(bitmap, scanSettings)
                 if (result.isSuccess) {
+                    Log.i(this::class.java.simpleName, "Result Text: $result")
                     _recognizedText.value = result.getOrNull()
                 } else {
                     _error.value = result.exceptionOrNull()?.message ?: "Unknown error"

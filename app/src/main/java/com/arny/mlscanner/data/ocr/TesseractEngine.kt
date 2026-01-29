@@ -30,6 +30,7 @@ class TesseractEngine(private val context: Context) {
         tessApi.setImage(bitmap)
         val fullText = tessApi.utF8Text // Сначала нужно получить текст, чтобы запустить анализ
 
+
         val boxes = mutableListOf<TextBox>()
         val iterator = tessApi.resultIterator
 
@@ -64,25 +65,37 @@ class TesseractEngine(private val context: Context) {
         // Очистка (важно для памяти!)
         tessApi.clear()
 
-        return OcrResult(boxes, System.currentTimeMillis())
+        val ocrResult = OcrResult(boxes, System.currentTimeMillis())
+        ocrResult.textBoxes.forEach { block ->
+            Log.d(this::class.java.simpleName, "Text: [${block.text}] Conf: ${block.confidence}")
+        }
+        return ocrResult
     }
 
+    // В TesseractEngine.kt
     private fun copyTessDataToStorage(context: Context): String {
-        // Tesseract ищет файлы в <path>/tessdata/rus.traineddata.back
-        // Поэтому мы возвращаем путь к ПАПКЕ, В КОТОРОЙ лежит папка tessdata
-        val tessDir = File(context.filesDir, "tessdata")
-        if (!tessDir.exists()) tessDir.mkdirs()
+        val dataDir = File(context.filesDir, "tessdata")
+        if (!dataDir.exists()) dataDir.mkdirs()
 
-        val rus = "rus.traineddata"
-        val dataFile = File(tessDir, rus)
-        if (!dataFile.exists()) {
-            context.assets.open("tessdata/${rus}").use { input ->
-                FileOutputStream(dataFile).use { output ->
-                    input.copyTo(output)
+        // ВАЖНО: Копируем rus И eng
+        listOf("rus.traineddata", "eng.traineddata").forEach { langFile ->
+            val dataFile = File(dataDir, langFile)
+            if (!dataFile.exists()) {
+                try {
+                    // ПРОВЕРЬТЕ, что в assets/tessdata лежат ОБА файла
+                    context.assets.open("tessdata/$langFile").use { input ->
+                        FileOutputStream(dataFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    Log.d(this::class.java.simpleName, "$langFile loaded")
+                } catch (e: Exception) {
+                    // Если нет файла, логируем ошибку
+                    Log.e(this::class.java.simpleName, "Failed to copy $langFile from assets", e)
                 }
             }
         }
-        return context.filesDir.absolutePath // Возвращаем родителя tessdata
+        return context.filesDir.absolutePath
     }
 
     fun close() {

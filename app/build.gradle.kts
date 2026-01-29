@@ -242,8 +242,8 @@ dependencies {
     implementation(libs.opencsv)
 
     // Unit Testing
-    testImplementation(libs.junit)
-    testImplementation(libs.junit.jupiter)
+    // ---------- Тестовые зависимости ----------
+    testImplementation(libs.junit.jupiter)          // JUnit 5
     testImplementation(libs.mockito.core)
     testImplementation(libs.mockito.kotlin)
     testImplementation(libs.androidx.core.testing) // Для InstantTaskExecutorRule

@@ -12,13 +12,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import com.arny.mlscanner.data.ocr.OcrEngine
+import com.arny.mlscanner.data.ocr.TesseractEngine
 import com.arny.mlscanner.domain.models.OcrResult
 import kotlinx.coroutines.cancel
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraAnalyzer(
-    private val ocrEngine: OcrEngine,
+    private val ocrEngine: TesseractEngine,
     private val onOcrResult: (OcrResult) -> Unit,
     private val onError: (Throwable) -> Unit
 ) : ImageAnalysis.Analyzer {

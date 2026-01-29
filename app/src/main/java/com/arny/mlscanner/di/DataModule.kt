@@ -1,7 +1,7 @@
 package com.arny.mlscanner.di
 
 import com.arny.mlscanner.data.matching.MatchingEngine
-import com.arny.mlscanner.data.ocr.OcrEngine
+import com.arny.mlscanner.data.ocr.TesseractEngine
 import com.arny.mlscanner.data.prefs.Prefs
 import com.arny.mlscanner.data.prefs.SecurePrefs
 import kotlinx.coroutines.CoroutineDispatcher
@@ -19,7 +19,7 @@ val dataModule = module {
     single<CoroutineDispatcher> { Dispatchers.IO }   // можно вынести в отдельный модуль
     single { ImagePreprocessor() }
     single { TextFormatPreserver() }
-    single { OcrEngine(get()) }
+    single { TesseractEngine(androidContext()) }
     single { PdfRedactionEngine(androidContext()) }
     single { MatchingEngine(get()) }
     single { LicenseManager(get()) }

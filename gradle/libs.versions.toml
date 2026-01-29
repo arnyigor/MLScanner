@@ -40,7 +40,7 @@ sqlcipher = "4.12.0"     # Обновлено до нового артефакт
 fuzzywuzzy = "1.4.0"
 opencsv = "5.12.0"
 navigationRuntimeKtx = "2.9.6"
-mockito = "5.10.0"
+mockito = "5.21.0"
 mockitoKotlin = "5.2.1"
 archCoreTesting = "2.2.0"
 

@@ -1,10 +1,9 @@
 package com.arny.mlscanner.domain.usecases
 
 import android.graphics.Bitmap
-import com.arny.mlscanner.data.ocr.OcrEngine
+import com.arny.mlscanner.data.ocr.TesseractEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.OcrResult
-import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.ScanSettings
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +16,7 @@ import kotlinx.coroutines.withContext
  * реальный Default‑dispatcher на Test‑dispatcher.
  */
 class AdvancedRecognizeTextUseCase(
-    private val ocrEngine: OcrEngine,
+    private val ocrEngine: TesseractEngine,
     private val imagePreprocessor: ImagePreprocessor,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default  // ← NEW
 ) {
@@ -39,14 +38,15 @@ class AdvancedRecognizeTextUseCase(
      * Инициализация OCR-движка
      */
     fun initializeOcrEngine(): Boolean {
-        return ocrEngine.initialize()
+        ocrEngine.init()
+        return true
     }
 
     /**
      * Освобождение ресурсов OCR-движка
      */
     fun cleanup() {
-        ocrEngine.cleanup()
+        ocrEngine.close()
     }
 
     /**

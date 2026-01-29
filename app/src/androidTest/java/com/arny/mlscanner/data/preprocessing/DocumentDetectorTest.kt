@@ -5,8 +5,6 @@ import android.graphics.Rect
 import org.junit.Test
 import org.junit.Before
 import org.junit.Assert.*
-import org.mockito.Mock
-import org.mockito.MockitoAnnotations
 import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
 

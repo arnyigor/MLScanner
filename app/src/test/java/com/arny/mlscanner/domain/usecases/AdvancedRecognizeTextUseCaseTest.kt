@@ -1,7 +1,7 @@
 package com.arny.mlscanner.domain.usecases
 
 import android.graphics.Bitmap
-import com.arny.mlscanner.data.ocr.OcrEngine
+import com.arny.mlscanner.data.ocr.TesseractEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.BoundingBox
 import com.arny.mlscanner.domain.models.OcrResult
@@ -31,7 +31,7 @@ import org.mockito.kotlin.whenever
 class AdvancedRecognizeTextUseCaseTest {
 
     @Mock
-    private lateinit var mockOcrEngine: OcrEngine
+    private lateinit var mockOcrEngine: TesseractEngine
 
     @Mock
     private lateinit var mockImagePreprocessor: ImagePreprocessor

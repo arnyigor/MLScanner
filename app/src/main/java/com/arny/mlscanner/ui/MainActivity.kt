@@ -1,11 +1,9 @@
 package com.arny.mlscanner.ui
 
-import android.os.Bundle
-import com.arny.mlscanner.data.security.RootChecker
-import android.widget.Toast
-import android.content.Intent
 import android.graphics.BitmapFactory
+import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,7 +13,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
-import com.arny.mlscanner.data.ocr.OcrEngine
 import com.arny.mlscanner.data.ocr.TesseractEngine
 import com.arny.mlscanner.ui.navigation.AppNavigation
 import com.arny.mlscanner.ui.navigation.Screen
@@ -25,34 +22,29 @@ import com.arny.mlscanner.ui.screens.ResultScreen
 import com.arny.mlscanner.ui.screens.ScanViewModel
 import com.arny.mlscanner.ui.screens.ScanningScreen
 import com.arny.mlscanner.ui.theme.AndroidComposeTemplateTheme
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
-import java.io.InputStream
-import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private fun showSecurityBlockScreen(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         finish()
     }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        /*if (RootChecker.isDeviceRooted() || RootChecker.isDebuggerConnected()) {
-            showSecurityBlockScreen("Root-доступ обнаружен. Приложение не может работать на модифицированных устройствах.")
-            return
-        }*/
+//        if (RootChecker.isDeviceRooted() || RootChecker.isDebuggerConnected()) {
+//            showSecurityBlockScreen("Root-доступ обнаружен. Приложение не может работать на модифицированных устройствах.")
+//            return
+//        }
         enableEdgeToEdge()
-        /*setContent {
+        setContent {
             AndroidComposeTemplateTheme {
                 MainScreen()
             }
-        }*/
-        // Загружаем ваше фото "Акку-Чек" из assets
+        }
         runMyOcr()
     }
 
