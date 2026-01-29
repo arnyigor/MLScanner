@@ -168,7 +168,8 @@ dependencies {
     // ML Kit Text Recognition V2 (offline)
     implementation(libs.text.recognition) // Latin + Cyrillic
     implementation(libs.language.id) // Language detection
-
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
+    implementation(libs.onnxruntime)
     // CameraX
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
@@ -176,7 +177,6 @@ dependencies {
 
     // OpenCV для предобработки
     implementation(libs.opencv)
-
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 
     // Koin core + Android support
