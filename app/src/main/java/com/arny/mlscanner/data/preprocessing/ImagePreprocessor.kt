@@ -42,6 +42,16 @@ class ImagePreprocessor(
 
     companion object {
         private const val TAG = "ImagePreprocessor"
+        // --- Константы ---
+        private const val BRIGHTNESS_DARK_THRESHOLD = 100.0
+        private const val BILATERAL_FILTER_DIAMETER = 5
+        private const val BILATERAL_SIGMA_COLOR = 75.0
+        private const val BILATERAL_SIGMA_SPACE = 75.0
+        private const val CANNY_THRESHOLD1 = 50.0
+        private const val CANNY_THRESHOLD2 = 150.0
+        private const val HOUGH_LINES_THRESHOLD = 100
+        private const val MAX_SKEW_ANGLE_DEG = 45.0
+        private const val MIN_SKEW_ANGLE_DEG = 0.5
 
         init {
             if (!OpenCVLoader.initDebug()) {
@@ -109,71 +119,74 @@ class ImagePreprocessor(
      *  Внутренние Helpers (Core Logic)                                   *
      * ------------------------------------------------------------------- */
 
-    private fun applyFiltersInternal(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
-        Log.d(
-            TAG,
-            "applyFiltersInternal received Bitmap Size: ${baseBitmap.width}x${baseBitmap.height}"
-        )
+    protected fun applyFiltersInternal(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
         val mat = Mat()
         try {
             Utils.bitmapToMat(baseBitmap, mat)
             val gray = Mat()
 
             try {
+                // Конвертация в Grayscale
                 if (mat.channels() == 1) {
                     mat.copyTo(gray)
                 } else {
                     Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
                 }
 
-                // --- НОВАЯ ЛОГИКА: АВТО-ИНВЕРСИЯ ---
-                // Вычисляем среднюю яркость пикселей
-                val meanBrightness = Core.mean(gray).`val`[0]
-                Log.d(TAG, "Image Mean Brightness: $meanBrightness")
+                // --- [CRITICAL FIX] Логика инверсии ---
+                // 1. Сначала определяем, нужна ли инверсия, и ЗАПОМИНАЕМ это состояние.
+                val needsInversion = shouldInvertForOcr(gray)
 
-                // Если яркость < 100 (из 255), считаем, что фон черный
-                // Tesseract требует ЧЕРНЫЙ текст на БЕЛОМ фоне.
-                if (meanBrightness < 100) {
-                    Log.i(TAG, "Dark background detected ($meanBrightness). Inverting image for OCR.")
-                    Core.bitwise_not(gray, gray) // Инверсия (255 - pixel)
+                if (needsInversion) {
+                    Log.i(TAG, "Dark background detected. Inverting image for OCR.")
+                    // 2. Выполняем инверсию. Теперь изображение станет СВЕТЛЫМ.
+                    Core.bitwise_not(gray, gray)
                 }
-                // -------------------------------------
+                // --------------------------------------
 
+                // Денойзинг
                 if (settings.denoiseEnabled) {
                     val temp = Mat()
-                    Imgproc.bilateralFilter(gray, temp, 5, 75.0, 75.0)
-                    temp.copyTo(gray)
-                    temp.release()
+                    try {
+                        Imgproc.bilateralFilter(
+                            gray, temp, BILATERAL_FILTER_DIAMETER,
+                            BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE
+                        )
+                        temp.copyTo(gray)
+                    } finally {
+                        temp.release()
+                    }
                 }
 
+                // Контраст / Яркость
                 val contrast = settings.contrastLevel ?: 1.0f
                 val brightness = settings.brightnessLevel ?: 0f
-
                 if (contrast != 1.0f || brightness != 0f) {
-                    // dst = src * alpha + beta
                     gray.convertTo(gray, -1, contrast.toDouble(), brightness.toDouble())
                 }
 
+                // Резкость
                 val sharpenLevel = settings.sharpenLevel ?: 0f
                 if (sharpenLevel > 0f) {
                     sharpen(gray, sharpenLevel)
                 }
 
+                // Бинаризация
+                // ВАЖНО: Используем сохраненный флаг needsInversion.
+                // Если бы мы вызвали shouldInvertForOcr(gray) здесь снова, он вернул бы false,
+                // так как изображение уже инвертировано (стало светлым).
+                val forcedBinarization = needsInversion
                 val userWantsBinarization = settings.binarizationEnabled
-                val forcedBinarization = meanBrightness < 100 // Если была инверсия, бинаризация обязательна
 
                 if (userWantsBinarization || forcedBinarization) {
-                    // Вариант 1: OTSU (Глобальный умный порог) - Идеально для логотипов/заголовков на однородном фоне
                     Imgproc.threshold(
-                        gray,
-                        gray,
-                        0.0,
-                        255.0,
+                        gray, gray, 0.0, 255.0,
                         Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
                     )
                 }
 
-                val result = createBitmap(gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888)
+                // Конвертация обратно в Bitmap
+                val result = Bitmap.createBitmap(gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888)
                 Utils.matToBitmap(gray, result)
                 return result
 
@@ -186,6 +199,14 @@ class ImagePreprocessor(
         } finally {
             mat.release()
         }
+    }
+
+    /**
+     * Проверяет среднюю яркость. Если она низкая (тёмный фон), возвращает true.
+     */
+    protected fun shouldInvertForOcr(grayMat: Mat): Boolean {
+        val meanBrightness = Core.mean(grayMat).`val`[0]
+        return meanBrightness < BRIGHTNESS_DARK_THRESHOLD
     }
 
     /**
