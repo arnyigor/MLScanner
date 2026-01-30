@@ -12,6 +12,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import androidx.core.graphics.scale
 
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
@@ -102,10 +103,13 @@ class ScanViewModel(
             // 1. Кропаем ОРИГИНАЛ (высокое разрешение)
             val cropped = cropBitmap(original, cropRect) ?: original
 
+            // 2. Апскейл (если cropped маленький)
+            val upscaled = if (maxOf(cropped.width, cropped.height) < 2000) {
+                scaleBitmapUp(cropped, 2000)
+            } else cropped
+
             // 2. Применяем фильтры к полному разрешению
-            // Здесь используем prepareBaseImage или applyFiltersOnly - зависит от того,
-            // нужно ли еще выпрямление. Если кроп ручной, авто-выпрямление обычно не нужно.
-            val processedFull = imagePreprocessor.applyFiltersOnly(cropped, settings)
+            val processedFull = imagePreprocessor.applyFiltersOnly(upscaled, settings)
 
             // 3. Запускаем OCR
             startScanningInternal(processedFull)
@@ -120,17 +124,49 @@ class ScanViewModel(
         startScanningInternal(bitmap)
     }
 
+    // В ScanViewModel.kt
+
     private fun startScanningInternal(bitmap: Bitmap) {
         viewModelScope.launch(Dispatchers.Default) {
             if (_isScanning.value) return@launch
+
+            // 1. Умное масштабирование
+            val minDimension = 2000
+            val maxDimension = 3000
+            val maxSide = maxOf(bitmap.width, bitmap.height)
+
+            var processedBitmap = bitmap
+            var needsBinarization = scanSettings.binarizationEnabled // Сохраняем пользовательскую настройку
+
+            // Если картинка мелкая -> апскейлим И принудительно включаем бинаризацию
+            if (maxSide < minDimension) {
+                Log.d("ScanViewModel", "Upscaling bitmap from $maxSide to $minDimension")
+                processedBitmap = scaleBitmapUp(bitmap, minDimension)
+                // Для размытых после апскейла картинок бинаризация обязательна,
+                // иначе Tesseract сходит с ума на градиентах
+                needsBinarization = true
+            } else if (maxSide > maxDimension) {
+                Log.d("ScanViewModel", "Downscaling bitmap from $maxSide to $maxDimension")
+                processedBitmap = scaleBitmapDown(bitmap, maxDimension)
+            }
+
+            // 2. Формируем настройки для этого прогона
+            // Если мы апскейлили, мы ОБЯЗАНЫ включить бинаризацию в препроцессоре,
+            // чтобы Tesseract получил четкое Ч/Б изображение, а не "мыло".
+            val actualSettings = if (needsBinarization && !scanSettings.binarizationEnabled) {
+                scanSettings.copy(binarizationEnabled = true)
+            } else {
+                scanSettings
+            }
 
             _isScanning.value = true
             _error.value = null
 
             try {
-                val result = recognizeTextUseCase.execute(bitmap, scanSettings)
+                // Tesseract получит уже подготовленную (увеличенную + бинаризованную) картинку
+                val result = recognizeTextUseCase.execute(processedBitmap, actualSettings)
+
                 if (result.isSuccess) {
-                    Log.i(this::class.java.simpleName, "Result Text: $result")
                     _recognizedText.value = result.getOrNull()
                 } else {
                     _error.value = result.exceptionOrNull()?.message ?: "Unknown error"
@@ -139,9 +175,33 @@ class ScanViewModel(
                 _error.value = e.message
             } finally {
                 _isScanning.value = false
+                // Если мы создавали новый битмап при скейле, его лучше бы освободить,
+                // но в Kotlin это сделает GC. Главное не ресайклить capturedBitmap.
             }
         }
     }
+
+    private fun scaleBitmapUp(bitmap: Bitmap, targetMinSide: Int): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        val ratio = targetMinSide.toFloat() / maxOf(w, h)
+
+        val newW = (w * ratio).toInt()
+        val newH = (h * ratio).toInt()
+
+        // 1. Создаем увеличенный битмап (он будет сглаженным/размытым)
+        val scaled = bitmap.scale(newW, newH)
+
+        // 2. КРИТИЧЕСКИ ВАЖНО: Копируем в чистый ARGB_8888.
+        // Tesseract часто падает на битмапах, полученных из createScaledBitmap напрямую,
+        // если система решила использовать Hardware config или другой stride.
+        return if (scaled.config != Bitmap.Config.ARGB_8888 || !scaled.isMutable) {
+            scaled.copy(Bitmap.Config.ARGB_8888, true)
+        } else {
+            scaled
+        }
+    }
+
 
     fun clear() {
         capturedBitmap = null

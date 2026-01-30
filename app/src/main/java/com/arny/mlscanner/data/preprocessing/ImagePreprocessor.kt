@@ -7,7 +7,10 @@ import androidx.core.graphics.createBitmap
 import com.arny.mlscanner.domain.models.ScanSettings
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.*
+import org.opencv.core.Core
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.io.FileOutputStream
@@ -18,9 +21,15 @@ data class Quadrilateral(
     val points: Array<org.opencv.core.Point>,
     val isValid: Boolean = points.size == 4
 )
+
 class DocumentDetector {
-    fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? { return null }
-    fun correctPerspective(bitmap: Bitmap, quadrilateral: Quadrilateral?): Bitmap? { return null }
+    fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? {
+        return null
+    }
+
+    fun correctPerspective(bitmap: Bitmap, quadrilateral: Quadrilateral?): Bitmap? {
+        return null
+    }
 }
 // --- КОНЕЦ DUMMY CLASSES ---
 
@@ -68,7 +77,7 @@ class ImagePreprocessor(
             if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
         saveBitmapForDebug(context, sourceBitmap, "01_original_camera.png")
-
+        Log.d(TAG, "ImagePreprocessor: Original Size: ${sourceBitmap.width}x${sourceBitmap.height}")
         // 1. Геометрия (DocumentDetector изолирован, чтобы не падать)
         val geomProcessed: Bitmap = try {
             val docCorrected = sourceBitmap // Пропускаем коррекцию перспективы
@@ -101,6 +110,10 @@ class ImagePreprocessor(
      * ------------------------------------------------------------------- */
 
     private fun applyFiltersInternal(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
+        Log.d(
+            TAG,
+            "applyFiltersInternal received Bitmap Size: ${baseBitmap.width}x${baseBitmap.height}"
+        )
         val mat = Mat()
         try {
             Utils.bitmapToMat(baseBitmap, mat)
@@ -112,6 +125,19 @@ class ImagePreprocessor(
                 } else {
                     Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
                 }
+
+                // --- НОВАЯ ЛОГИКА: АВТО-ИНВЕРСИЯ ---
+                // Вычисляем среднюю яркость пикселей
+                val meanBrightness = Core.mean(gray).`val`[0]
+                Log.d(TAG, "Image Mean Brightness: $meanBrightness")
+
+                // Если яркость < 100 (из 255), считаем, что фон черный
+                // Tesseract требует ЧЕРНЫЙ текст на БЕЛОМ фоне.
+                if (meanBrightness < 100) {
+                    Log.i(TAG, "Dark background detected ($meanBrightness). Inverting image for OCR.")
+                    Core.bitwise_not(gray, gray) // Инверсия (255 - pixel)
+                }
+                // -------------------------------------
 
                 if (settings.denoiseEnabled) {
                     val temp = Mat()
@@ -133,9 +159,17 @@ class ImagePreprocessor(
                     sharpen(gray, sharpenLevel)
                 }
 
-                if (settings.binarizationEnabled) {
-                    Imgproc.adaptiveThreshold(
-                        gray, gray, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY, 15, 10.0
+                val userWantsBinarization = settings.binarizationEnabled
+                val forcedBinarization = meanBrightness < 100 // Если была инверсия, бинаризация обязательна
+
+                if (userWantsBinarization || forcedBinarization) {
+                    // Вариант 1: OTSU (Глобальный умный порог) - Идеально для логотипов/заголовков на однородном фоне
+                    Imgproc.threshold(
+                        gray,
+                        gray,
+                        0.0,
+                        255.0,
+                        Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
                     )
                 }
 

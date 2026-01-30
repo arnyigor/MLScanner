@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
                 MainScreen()
             }
         }
-        runMyOcr()
+//        runMyOcr()
     }
 
     private fun runMyOcr() {

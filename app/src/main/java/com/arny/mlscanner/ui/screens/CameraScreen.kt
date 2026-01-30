@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOff
@@ -65,6 +64,7 @@ import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -120,8 +120,13 @@ fun CameraScreen(
     ) { uri: Uri? ->
         uri?.let {
             try {
-                val bitmap = loadBitmapFromUri(context, it)
+                val tempFile = saveUriToCacheFile(context, it)
+                val bitmap = rotateBitmapIfNeeded(
+                    BitmapFactory.decodeFile(tempFile.absolutePath),
+                    tempFile.absolutePath
+                )
                 onImageCaptured(bitmap)
+                tempFile.delete()
             } catch (e: Exception) {
                 onError(e)
             }
@@ -420,7 +425,11 @@ private fun captureImage(
         object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                 try {
-                    val bitmap = BitmapFactory.decodeFile(outputFile.absolutePath)
+                    // Гарантируем ARGB_8888 для совместимости с OpenCV
+                    val options = BitmapFactory.Options()
+                        .apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+                    val bitmap = BitmapFactory.decodeFile(outputFile.absolutePath, options)
+                    // Поворачиваем, если нужно, используя путь к файлу
                     val rotatedBitmap = rotateBitmapIfNeeded(bitmap, outputFile.absolutePath)
                     onImageCaptured(rotatedBitmap)
                     outputFile.delete()
@@ -436,11 +445,18 @@ private fun captureImage(
     )
 }
 
-private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap {
-    val inputStream = context.contentResolver.openInputStream(uri)
-    return BitmapFactory.decodeStream(inputStream)
+// Вспомогательная функция для сохранения URI во временный файл для последующей обработки EXIF
+private fun saveUriToCacheFile(context: Context, uri: Uri): File {
+    val tempFile = File(context.cacheDir, "gallery_temp_${System.currentTimeMillis()}.jpg")
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        FileOutputStream(tempFile).use { output ->
+            input.copyTo(output)
+        }
+    } ?: throw Exception("Failed to create temporary file for URI: $uri")
+    return tempFile
 }
 
+// Универсальная функция для поворота Bitmap на основе EXIF-данных файла
 private fun rotateBitmapIfNeeded(bitmap: Bitmap, path: String): Bitmap {
     val exif = ExifInterface(path)
     val orientation = exif.getAttributeInt(
@@ -455,9 +471,16 @@ private fun rotateBitmapIfNeeded(bitmap: Bitmap, path: String): Bitmap {
         ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
     }
 
-    return if (matrix.isIdentity) {
-        bitmap
+    // Если поворот не требуется, возвращаем исходный Bitmap
+    if (matrix.isIdentity) {
+        return bitmap
     } else {
-        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        // Создаем новый Bitmap с примененным поворотом
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
+}
+
+private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap {
+    val inputStream = context.contentResolver.openInputStream(uri)
+    return BitmapFactory.decodeStream(inputStream)
 }

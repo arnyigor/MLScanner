@@ -2,6 +2,7 @@ package com.arny.mlscanner.data.ocr
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Build
 import android.util.Log
 import com.arny.mlscanner.domain.models.BoundingBox
 import com.arny.mlscanner.domain.models.OcrResult
@@ -13,6 +14,8 @@ import java.io.FileOutputStream
 class TesseractEngine(private val context: Context) {
     private val tessApi = TessBaseAPI()
     private var initialized = false
+
+    private val lock = Any() // Объект для синхронизации
 
     companion object {
         private const val TAG = "TesseractEngine"
@@ -34,10 +37,10 @@ class TesseractEngine(private val context: Context) {
             }
 
             // PSM_AUTO - лучший режим для общего документа
-            tessApi.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+            tessApi.pageSegMode = TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
 
             initialized = true
-            Log.d(TAG, "Tesseract initialized with rus+eng. PSM_AUTO.")
+            Log.d(TAG, "Tesseract initialized with rus+eng. PSM_SPARSE_TEXT.")
         } catch (e: Exception) {
             Log.e(TAG, "Tesseract initialization error", e)
             initialized = false
@@ -47,63 +50,91 @@ class TesseractEngine(private val context: Context) {
     /**
      * Основной метод распознавания.
      */
-    fun recognize(bitmap: Bitmap): OcrResult {
+    fun recognize(bitmap: Bitmap): OcrResult = synchronized(lock) { // 1. СИНХРОНИЗАЦИЯ
         if (!initialized) init()
-        if (!initialized) {
-            Log.e(TAG, "Engine not initialized, skipping recognition.")
-            return OcrResult(emptyList(), System.currentTimeMillis())
+        if (!initialized) return OcrResult(emptyList(), System.currentTimeMillis())
+
+        // 2. ИСПРАВЛЕННАЯ ЛОГИКА ПРОВЕРКИ
+        // Мы копируем битмап в двух случаях:
+        // А) Это Hardware Bitmap (вызывает нативный краш).
+        // Б) Это НЕ ARGB_8888 (Tesseract может крашиться на RGB_565 из-за выравнивания памяти).
+        val needsCopy = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) ||
+                bitmap.config != Bitmap.Config.ARGB_8888
+
+        val safeBitmap = if (needsCopy) {
+            Log.w(TAG, "Bitmap config is ${bitmap.config}. Copying to ARGB_8888 to ensure native safety.")
+            // true -> mutable (на всякий случай, хотя для чтения это не обязательно, но безопасно)
+            bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        } else {
+            bitmap
         }
 
-        tessApi.setImage(bitmap)
+        try {
+            tessApi.setImage(safeBitmap)
 
-        // 1. ЗАПУСК РАСПОЗНАВАНИЯ (это ключевой вызов)
-        val fullText = tessApi.utF8Text ?: ""
+            // 1. ЗАПУСК РАСПОЗНАВАНИЯ
+            val fullText = tessApi.utF8Text.orEmpty()
 
-        if (fullText.isBlank()) {
-            Log.w(TAG, "Tesseract returned EMPTY fullText. Skipping box parsing.")
-            tessApi.clear()
-            return OcrResult(emptyList(), System.currentTimeMillis())
-        }
+            if (fullText.isBlank()) {
+                Log.w(TAG, "Tesseract returned EMPTY fullText. Skipping box parsing.")
+                // tessApi.clear() вызовется в finally
+                return OcrResult(emptyList(), System.currentTimeMillis())
+            }
 
-        // --- ДЛЯ ОТЛАДКИ ---
-        Log.i(TAG, "Full Recognized Text (Tesseract):\n${fullText.trim()}")
-        // --- КОНЕЦ ОТЛАДКИ ---
+            // --- ДЛЯ ОТЛАДКИ ---
+            Log.i(TAG, "Full Recognized Text (Tesseract):\n${fullText.trim()}")
+            // --- КОНЕЦ ОТЛАДКИ ---
 
-        val boxes = mutableListOf<TextBox>()
-        val iterator = tessApi.resultIterator
+            val boxes = mutableListOf<TextBox>()
+            val iterator = tessApi.resultIterator
 
-        if (iterator != null) {
-            iterator.begin()
-            do {
-                val level = TessBaseAPI.PageIteratorLevel.RIL_WORD
-                val word = iterator.getUTF8Text(level)?.trim()
-                val rect = iterator.getBoundingBox(level)
-                val conf = iterator.confidence(level)
+            if (iterator != null) {
+                iterator.begin()
+                do {
+                    val level = TessBaseAPI.PageIteratorLevel.RIL_WORD
+                    val word = iterator.getUTF8Text(level)?.trim()
 
-                if (word != null && word.isNotBlank() && rect != null && rect.size >= 4) {
-                    val left = rect[0].toFloat()
-                    val top = rect[1].toFloat()
-                    val right = rect[2].toFloat()
-                    val bottom = rect[3].toFloat()
+                    // Важно: иногда getBoundingBox возвращает null или массив неправильного размера
+                    val rect = iterator.getBoundingBox(level)
+                    val conf = iterator.confidence(level)
 
-                    // [ЛОГ]: Выводим BBox и Conf для каждого слова (для отладки)
-                    // Log.d(TAG, "WORD: $word, Conf: ${conf / 100f}, Box: $left,$top,$right,$bottom")
+                    if (!word.isNullOrBlank() && rect != null && rect.size >= 4) {
+                        val left = rect[0].toFloat()
+                        val top = rect[1].toFloat()
+                        val right = rect[2].toFloat()
+                        val bottom = rect[3].toFloat()
 
-                    boxes.add(
-                        TextBox(
-                            text = word,
-                            confidence = conf / 100f,
-                            boundingBox = BoundingBox(left, top, right, bottom)
+                        boxes.add(
+                            TextBox(
+                                text = word,
+                                confidence = conf / 100f,
+                                boundingBox = BoundingBox(left, top, right, bottom)
+                            )
                         )
-                    )
-                }
+                    }
 
-            } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
-            iterator.delete()
+                } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
+
+                // Обязательно удаляем итератор, это нативный объект
+                iterator.delete()
+            }
+
+            return OcrResult(boxes, System.currentTimeMillis())
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during native recognition", e)
+            return OcrResult(emptyList(), System.currentTimeMillis())
+        } finally {
+            // ВАЖНО: Очищаем изображение после распознавания
+            // Делаем это в finally, чтобы выполнилось даже при ошибке
+            tessApi.clear()
+
+            // Если мы создавали копию битмапа (safeBitmap != bitmap), её нужно освободить,
+            // чтобы не забивать память, так как GC может не успеть за камерой.
+            if (safeBitmap !== bitmap) {
+                safeBitmap.recycle()
+            }
         }
-
-        tessApi.clear()
-        return OcrResult(boxes, System.currentTimeMillis())
     }
 
     /**
