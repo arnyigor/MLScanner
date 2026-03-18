@@ -1,8 +1,12 @@
 package com.arny.mlscanner.data.camera
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.util.Log
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 
@@ -18,6 +22,7 @@ import kotlinx.coroutines.cancel
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraAnalyzer(
+    private val context: android.content.Context,
     private val ocrEngine: TesseractEngine,
     private val onOcrResult: (OcrResult) -> Unit,
     private val onError: (Throwable) -> Unit
@@ -31,10 +36,9 @@ class CameraAnalyzer(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val rotationMatrix = Matrix()
+    private val yuvToRgbConverter = YuvToRgbConverter(context)
 
-    // Метод будет вызван в фоновом потоке, который мы передадим в setAnalyzer
     override fun analyze(imageProxy: ImageProxy) {
-        // Skip frame if already processing
         if (isProcessing.getAndSet(true)) {
             imageProxy.close()
             return
@@ -42,37 +46,55 @@ class CameraAnalyzer(
 
         scope.launch {
             try {
-                // Heavy work in IO dispatcher
-                val correctedBitmap = withContext(ioDispatcher) {
-                    val bitmap = imageProxy.toBitmap()
-                    val rotation = imageProxy.imageInfo.rotationDegrees
-                    if (rotation != 0) rotateBitmap(bitmap, rotation) else bitmap
+                // Безопасная конвертация с учётом формата
+                val bitmap = withContext(Dispatchers.Default) {
+                    convertImageProxyToBitmap(imageProxy)
                 }
 
-                // Close proxy after conversion & rotation to free buffer
-                imageProxy.close()
+                imageProxy.close() // Освобождаем сразу после конвертации
 
-                // OCR recognition on IO dispatcher
-                val result = withContext(ioDispatcher) {
-                    ocrEngine.recognize(correctedBitmap)
+                val rotation = imageProxy.imageInfo.rotationDegrees
+                val corrected = if (rotation != 0) rotateBitmap(bitmap, rotation) else bitmap
+
+                val result = withContext(Dispatchers.IO) {
+                    ocrEngine.recognize(corrected)
                 }
 
-                // Deliver result on Main thread
                 withContext(Dispatchers.Main) {
                     onOcrResult(result)
                 }
+
+                // Очистка если создавали копии
+                if (corrected !== bitmap) corrected.recycle()
+
             } catch (e: Exception) {
                 Log.e(TAG, "Analysis failed", e)
-                withContext(Dispatchers.Main) {
-                    onError(e)
-                }
+                withContext(Dispatchers.Main) { onError(e) }
             } finally {
                 isProcessing.set(false)
             }
         }
     }
 
-    fun shutdown() = scope.cancel()
+    @OptIn(ExperimentalGetImage::class)
+    private fun convertImageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
+        val image = imageProxy.image ?: throw IllegalStateException("Image is null")
+
+        return when (image.format) {
+            ImageFormat.YUV_420_888 -> {
+                // Используем RenderScript или чистый Java для конвертации
+                yuvToRgbConverter.yuvToRgb(image, imageProxy.width, imageProxy.height)
+            }
+            ImageFormat.JPEG -> {
+                val buffer = image.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IllegalStateException("Failed to decode JPEG")
+            }
+            else -> throw IllegalArgumentException("Unsupported format: ${image.format}")
+        }
+    }
 
     private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
         rotationMatrix.reset()

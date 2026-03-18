@@ -8,14 +8,16 @@ import com.arny.mlscanner.domain.models.BoundingBox
 import com.arny.mlscanner.domain.models.OcrResult
 import com.arny.mlscanner.domain.models.TextBox
 import com.googlecode.tesseract.android.TessBaseAPI
+import org.opencv.core.Mat
 import java.io.File
 import java.io.FileOutputStream
 
 class TesseractEngine(private val context: Context) {
     private val tessApi = TessBaseAPI()
     private var initialized = false
-
     private val lock = Any() // Объект для синхронизации
+    // Кэш для переиспользования Mat
+    private val reusableMat = Mat()
 
     companion object {
         private const val TAG = "TesseractEngine"
@@ -53,21 +55,8 @@ class TesseractEngine(private val context: Context) {
     fun recognize(bitmap: Bitmap): OcrResult = synchronized(lock) { // 1. СИНХРОНИЗАЦИЯ
         if (!initialized) init()
         if (!initialized) return OcrResult(emptyList(), System.currentTimeMillis())
-
-        // 2. ИСПРАВЛЕННАЯ ЛОГИКА ПРОВЕРКИ
-        // Мы копируем битмап в двух случаях:
-        // А) Это Hardware Bitmap (вызывает нативный краш).
-        // Б) Это НЕ ARGB_8888 (Tesseract может крашиться на RGB_565 из-за выравнивания памяти).
-        val needsCopy = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) ||
-                bitmap.config != Bitmap.Config.ARGB_8888
-
-        val safeBitmap = if (needsCopy) {
-            Log.w(TAG, "Bitmap config is ${bitmap.config}. Copying to ARGB_8888 to ensure native safety.")
-            // true -> mutable (на всякий случай, хотя для чтения это не обязательно, но безопасно)
-            bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        } else {
-            bitmap
-        }
+        // Защита: гарантированная конвертация в безопасный формат
+        val safeBitmap = ensureSafeBitmap(bitmap)
 
         try {
             tessApi.setImage(safeBitmap)
@@ -135,6 +124,21 @@ class TesseractEngine(private val context: Context) {
                 safeBitmap.recycle()
             }
         }
+    }
+
+    private fun ensureSafeBitmap(source: Bitmap): Bitmap {
+        // Проверяем все опасные условия
+        val needsCopy = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    source.config == Bitmap.Config.HARDWARE -> true
+            source.config != Bitmap.Config.ARGB_8888 -> true
+            !source.isMutable -> true  // Tesseract может модифицировать
+            else -> false
+        }
+
+        return if (needsCopy) {
+            source.copy(Bitmap.Config.ARGB_8888, true)
+        } else source
     }
 
     /**

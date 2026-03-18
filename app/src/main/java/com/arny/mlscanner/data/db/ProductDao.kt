@@ -29,4 +29,7 @@ interface ProductDao {
 
     @Query("SELECT COUNT(*) FROM products")
     suspend fun getProductCount(): Int
+
+    @Query("INSERT INTO products_fts(products_fts) VALUES('rebuild')")
+    suspend fun rebuildFtsIndex()
 }

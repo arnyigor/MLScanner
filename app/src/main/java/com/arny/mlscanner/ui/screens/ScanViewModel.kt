@@ -2,22 +2,36 @@ package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.core.graphics.scale
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.usecases.RecognizeTextUseCase
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import androidx.core.graphics.scale
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
     private val imagePreprocessor: ImagePreprocessor
 ) : ViewModel() {
+
+
+    private companion object {
+        // Оптимальные размеры для Tesseract
+        const val OPTIMAL_MIN_DIMENSION = 2000  // Минимум для хорошего OCR
+        const val OPTIMAL_MAX_DIMENSION = 3000  // Максимум для стабильности
+        const val PREVIEW_MAX_DIMENSION = 1280  // Для UI-превью
+        const val MAX_MEMORY_USAGE_MB = 150  // Лимит памяти для одного скана
+    }
 
     // --- State ---
 
@@ -51,8 +65,6 @@ class ScanViewModel(
 
     // Job для отмены устаревших фильтраций
     private var filterJob: Job? = null
-
-    // --- Methods ---
 
     fun setCapturedImage(bitmap: Bitmap) {
         capturedBitmap = bitmap // Сохраняем оригинал
@@ -124,8 +136,6 @@ class ScanViewModel(
         startScanningInternal(bitmap)
     }
 
-    // В ScanViewModel.kt
-
     private fun startScanningInternal(bitmap: Bitmap) {
         viewModelScope.launch(Dispatchers.Default) {
             if (_isScanning.value) return@launch
@@ -136,7 +146,8 @@ class ScanViewModel(
             val maxSide = maxOf(bitmap.width, bitmap.height)
 
             var processedBitmap = bitmap
-            var needsBinarization = scanSettings.binarizationEnabled // Сохраняем пользовательскую настройку
+            var needsBinarization =
+                scanSettings.binarizationEnabled // Сохраняем пользовательскую настройку
 
             // Если картинка мелкая -> апскейлим И принудительно включаем бинаризацию
             if (maxSide < minDimension) {
@@ -201,7 +212,6 @@ class ScanViewModel(
             scaled
         }
     }
-
 
     fun clear() {
         capturedBitmap = null

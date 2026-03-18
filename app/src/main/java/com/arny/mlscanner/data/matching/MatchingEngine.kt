@@ -71,6 +71,9 @@ class MatchingEngine(
                     .map(ProductEntity::fromProductItem)
                 productDao.insertProducts(entities)
 
+                // Принудительная переиндексация FTS
+                productDao.rebuildFtsIndex()
+
                 Log.d(TAG, "Imported ${items.size} items from CSV")
                 true
             }
@@ -105,6 +108,9 @@ class MatchingEngine(
             val entities = items.map { it.copy(sku = it.sku.uppercase()) }
                 .map(ProductEntity::fromProductItem)
             productDao.insertProducts(entities)
+
+            // Принудительная переиндексация FTS
+            productDao.rebuildFtsIndex()
 
             Log.d(TAG, "Imported ${items.size} items from JSON")
             true

@@ -18,9 +18,27 @@ import kotlin.math.abs
 
 // --- DUMMY CLASSES ДЛЯ ИЗОЛЯЦИИ СБОЕВ DocumentDetector ---
 data class Quadrilateral(
-    val points: Array<org.opencv.core.Point>,
+    val points: Array<Point>,
     val isValid: Boolean = points.size == 4
-)
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as Quadrilateral
+
+        if (isValid != other.isValid) return false
+        if (!points.contentEquals(other.points)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = isValid.hashCode()
+        result = 31 * result + points.contentHashCode()
+        return result
+    }
+}
 
 class DocumentDetector {
     fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? {
