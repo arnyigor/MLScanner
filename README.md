@@ -1,77 +1,295 @@
-# 🧠 Smart ML Scanner (Prompt Master)
+# MLScanner
 
-> **Next-Gen Offline Document Intelligence for Android**  
-> *High-precision OCR with structure preservation, powered by on-device AI.*
+Android-приложение для интеллектуального распознавания текста (OCR) с поддержкой русского и английского языков, редактированием конфиденциальных данных и созданием searchable PDF.
 
-![Kotlin](https://img.shields.io/badge/Kotlin-1.9.20-blue.svg?logo=kotlin)
-![Platform](https://img.shields.io/badge/Platform-Android%2010%2B-green.svg?logo=android)
-![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)
-![Status](https://img.shields.io/badge/Status-Active_Dev-orange.svg)
+## 🚀 Возможности
 
-## 🚀 Overview
+### Основной функционал
+- **Мультиязычное OCR** — распознавание текста на русском и английском языках
+- **Гибридный движок** — комбинация ML Kit и Tesseract 4 LSTM для максимальной точности
+- **Предобработка изображений** — контраст, яркость, резкость, бинаризация, автоповорот
+- **Ручное кадрирование** — интерактивное выделение области распознавания
+- **Режим рукописного текста** — оптимизация для распознавания handwriting
 
-**Smart ML Scanner** is not just another OCR wrapper. It addresses the critical flaw of mobile OCR: **loss of structure**. While most scanners flatten text into a blob, this project reconstructs the original document layout (indentation, code blocks, paragraphs) using coordinate-based heuristics.
+### Безопасность и соответствие требованиям
+- **Автоматическое обнаружение чувствительных данных**:
+  - Номера кредитных карт (с валидацией по алгоритму Луна)
+  - Паспорта РФ (серия и номер)
+  - Email-адреса
+  - Российские номера телефонов
+  - ИНН, СНИЛС, КПП
+  - Даты
+  - Пользовательские регулярные выражения
 
-**Current Phase:** Moving from "Wrapper" to **"Hybrid Neural Pipeline"**.  
-We are building a privacy-first, offline-only document analysis tool that combines Computer Vision (OpenCV) for precision, Neural Networks (PaddleOCR) for reading, and Small Language Models (SLMs) for understanding.
+- **Редактирование (Redaction)**:
+  - Создание PDF с закрытыми (зачернёнными) областями
+  - Невидимый текстовый слой для поиска (Ctrl+F)
+  - Защита от копирования текста
+  - Шифрование временных файлов
 
-## ✨ Key Features
+### Продвинутые функции
+- **Поиск по справочнику** — сопоставление распознанных SKU с базой данных товаров
+- **Fuzzy-поиск** — нахождение похожих артикулов даже при ошибках OCR
+- **Экспорт в PDF/A** — архивно-стойкий формат документов
+- **Бенчмарк OCR** — сравнительное тестирование движков
 
-### ✅ Currently Implemented (v0.5)
-- **Structure-Aware OCR:** Unique algorithm (`TextFormatPreserver`) that analyzes Bounding Box coordinates to reconstruct indentation levels (crucial for scanning code snippets or poetry).
-- **Material 3 UI:** Modern, clean Jetpack Compose interface.
-- **CameraX Integration:** Fast, reactive camera viewfinder with zoom and torch control.
-- **Privacy First:** Zero data leaves the device. All processing is local.
+## 🏗️ Архитектура
 
-### 🚧 In Development (The "Hybrid Pipeline")
-- **Advanced Preprocessing (OpenCV):**
-    - Document edge detection & auto-cropping.
-    - Perspective warping (flattening angled photos).
-    - Adaptive binarization (removing shadows/noise).
-- **Neural Engine Switch:** Migrating from ML Kit to **PaddleOCR v4 (ONNX)** for superior table & layout recognition.
-- **Semantic Understanding (RAG):**
-    - Local Vector Database (ObjectBox) for semantic search ("Show me that receipt for coffee").
-    - **SLM Post-processing:** Using Qwen-2.5-1.5B (via llama.cpp) to correct OCR typos and extract JSON data.
+### Технологический стек
 
-## 🛠 Tech Stack
+| Компонент | Технология |
+|-----------|-----------|
+| Язык | Kotlin 2.x |
+| UI | Jetpack Compose |
+| DI | Koin |
+| OCR | ML Kit Text Recognition + Tesseract 4 |
+| Камера | CameraX |
+| ML/Обработка | OpenCV 4.x, ONNX Runtime |
+| База данных | Room + SQLCipher (шифрование) |
+| PDF | Apache PDFBox Android |
+| Сетевой слой | Ktor Client (подготовлен) |
 
-*   **Core:** Kotlin, Coroutines, Flow
-*   **UI:** Jetpack Compose (Material 3)
-*   **Vision:** CameraX, ML Kit (legacy), OpenCV (incoming), ONNX Runtime (incoming)
-*   **Architecture:** MVI / Clean Architecture
-*   **DI:** Koin
-*   **Concurrency:** Kotlin Coroutines & Channels
-
-## 📐 Architecture Highlight: Text Format Preservation
-
-Standard OCR returns a bag of words. We preserve meaning through geometry:
+### Слоистая архитектура (Clean Architecture)
 
 ```
-// Logic snippet: Preserving python/kotlin indentation from photos
-val minX = sortedLines.minOf { it.boundingBox.left }
-val indentLevel = ((lineX - minX) / CHAR_WIDTH_PX).coerceAtLeast(0)
-val indent = "    ".repeat(indentLevel)
+┌─────────────────────────────────────┐
+│           Presentation              │
+│    (Compose UI + ViewModels)        │
+├─────────────────────────────────────┤
+│            Domain                   │
+│  (UseCases, Models, Repository      │
+│          Interfaces)                │
+├─────────────────────────────────────┤
+│             Data                    │
+│  (OCR Engines, DB, Prefs, PDF,      │
+│   Preprocessing, Security)          │
+└─────────────────────────────────────┘
 ```
 
-## 🗺️ Roadmap
+### Ключевые компоненты
 
-| Phase | Goal | Status |
-|-------|------|--------|
-| **1** | **MVP:** CameraX + ML Kit + Formatting Logic | ✅ **Done** |
-| **2** | **Vision:** OpenCV Preprocessing (Crop/Warp) | 🔄 **In Progress** |
-| **3** | **Brain:** Replace ML Kit with PaddleOCR (ONNX) | 📅 Planned |
-| **4** | **Intellect:** Add Local RAG (Vector DB + Search) | 📅 Planned |
-| **5** | **Polish:** KMP support for iOS | 🔮 Future |
+#### OCR Engine (`data/ocr/engine/`)
+- `OcrEngine` — базовый интерфейс
+- `MLKitEngine` — Google ML Kit (быстрый, латиница)
+- `TesseractEngine` — Tesseract 4 LSTM (русский, офлайн)
+- `HybridEngine` — интеллектуальный выбор между движками
 
-## 🤝 Contributing
+**Логика HybridEngine:**
+1. Первым запускается Tesseract (лучше с русским)
+2. Если обнаружена кириллица → сразу возвращаем результат Tesseract
+3. Для латиницы сравниваем с ML Kit и выбираем лучший
+4. Детекция "транслит-мусора" (когда ML Kit пытается читать кириллицу)
 
-We are exploring the limits of **Mobile Edge AI**. If you know:
-*   Kotlin / C++ (JNI)
-*   ONNX / TensorFlow Lite
-*   OpenCV android sdk
+#### Предобработка изображений (`data/preprocessing/`)
+- `ImagePreprocessor` — основной pipeline (deskew, grayscale, фильтры)
+- `AdvancedDocumentPreprocessor` — специализированные пресеты:
+  - `GENERAL` — общий случай
+  - `WHITE_PAPER` — документы на белой бумаге
+  - `RECEIPT` — чеки и квитанции
+  - `SIGN` — вывески и таблички
+  - `SCREENSHOT` — скриншоты экрана
 
-...pull requests are welcome!
+- `DocumentDetector` — автоматическое нахождение границ документа (OpenCV)
+- `YuvConverter` — быстрая конвертация YUV_420_888 → RGB без RenderScript
 
-## 📄 License
+#### Безопасность (`data/security/`)
+- `LicenseManager` — проверка цифровых лицензий (RSA + AES-GCM)
+- `DeviceIdentityProvider` — криптографическая привязка к устройству (AndroidKeyStore)
+- `SecurePrefs` — зашифрованные SharedPreferences (EncryptedSharedPreferences)
+- `RootChecker` — обнаружение root-прав и отладчиков
 
-Distributed under the MIT License. See `LICENSE` for more information.
+#### Работа с PDF (`data/pdf/`)
+- `PdfGenerator` — создание searchable PDF с невидимым текстовым слоем
+- `PdfRedactionEngine` — редактор конфиденциальных данных
+  - Деструктивное редактирование (перманентное удаление пикселей)
+  - Растеризация существующих PDF
+  - Координатная синхронизация OCR → PDF
+
+## 📋 Требования
+
+### Минимальные
+- Android 7.0 (API 24)
+- 2 GB RAM
+- 100 MB свободного места
+
+### Рекомендуемые
+- Android 10+ (API 29+)
+- 4 GB RAM
+- Камера с автофокусом
+
+### Разрешения
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+```
+
+## 🔧 Сборка
+
+### Предварительные требования
+- Android Studio Ladybug | 2024.2.1+
+- JDK 17
+- NDK (для OpenCV и Tesseract)
+
+### Локальные настройки (`local.properties`)
+```properties
+# API ключи (опционально)
+API_SECRET_KEY=your_secret_key_here
+
+# Подпись релиза (опционально)
+SIGNING_KEY_STORE_PATH=release.keystore
+SIGNING_KEY_STORE_PASSWORD=password
+SIGNING_KEY_ALIAS=release
+SIGNING_KEY_PASSWORD=password
+```
+
+### Сборка APK
+```bash
+# Debug
+./gradlew :app:assembleDebug
+
+# Release с версией из version.properties
+./gradlew :app:assembleRelease -PversionName=1.2.3
+```
+
+### Управление версиями
+Версия определяется по приоритету:
+1. Gradle property `versionName`
+2. Environment variable `VERSION_NAME`
+3. Файл `version.properties` (формат: `version=1.2.3`)
+4. Fallback: `0.1.0`
+
+## 🧪 Тестирование
+
+### Структура тестов
+```
+src/test/           # Unit-тесты (JUnit 5 + Mockito)
+src/androidTest/    # Инструментальные тесты (AndroidJUnit4)
+```
+
+### Запуск тестов
+```bash
+# Unit-тесты
+./gradlew :app:test
+
+# Инструментальные тесты
+./gradlew :app:connectedAndroidTest
+
+# С отчётом о покрытии
+./gradlew :app:jacocoTestReport
+```
+
+### Основные тестовые сценарии
+- `MatchingEngineTest` — импорт CSV/JSON, fuzzy-поиск, нормализация SKU
+- `SensitiveDataDetectorTest` — детекция кредиток, паспортов, email
+- `LicenseManagerTest` — шифрование, подпись, валидация лицензий
+- `IntegrationTests` — сквозные сценарии OCR → Redaction → Matching
+
+## 📦 Зависимости
+
+### OCR и ML
+```kotlin
+// ML Kit
+implementation("com.google.mlkit:text-recognition:16.0.0")
+
+// Tesseract
+implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
+
+// OpenCV
+implementation("org.opencv:opencv-android:4.9.0")
+
+// ONNX Runtime
+implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.3")
+```
+
+### Безопасность и хранение
+```kotlin
+// SQLCipher для шифрования БД
+implementation("net.zetetic:sqlcipher-android:4.12.0")
+
+// EncryptedSharedPreferences
+implementation("androidx.security:security-crypto:1.1.0-alpha06")
+```
+
+### PDF и документы
+```kotlin
+// Apache PDFBox для Android
+implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+
+// OpenCSV для импорта
+implementation("com.opencsv:opencsv:5.8")
+
+// FuzzyWuzzy для нечёткого поиска
+implementation("me.xdrop:fuzzywuzzy:1.4.0")
+```
+
+## 🔄 Workflow приложения
+
+```
+┌─────────┐    ┌─────────────┐    ┌──────────────┐    ┌─────────┐
+│  Camera │───→│ Preprocessing│───→│    OCR       │───→│ Result  │
+│ Screen  │    │   Screen     │    │   Screen     │    │ Screen  │
+└─────────┘    └─────────────┘    └──────────────┘    └─────────┘
+     │                │                   │                 │
+     ▼                ▼                   ▼                 ▼
+  Захват фото    Настройка фильтров   Распознавание    Редактирование
+  или галерея    Кадрирование         (async)          текста
+                 Поворот                               Экспорт PDF
+```
+
+## 🛡️ Безопасность данных
+
+### Шифрование базы данных
+- SQLCipher с AES-256
+- Ключ генерируется случайно и хранится в EncryptedSharedPreferences
+- Поддержка миграции с перешифрованием
+
+### Защита лицензий
+- Асимметричное шифрование (RSA-2048)
+- Привязка к устройству через AndroidKeyStore
+- Проверка подписи лицензионного файла
+- Срок действия и список функций в лицензии
+
+### Обработка чувствительных данных
+- Все операции redaction выполняются локально
+- Временные файлы шифруются
+- Автоматическая очистка кэша
+
+## 🌐 Локализация
+
+Поддерживаемые языки интерфейса:
+- Русский
+- Английский
+
+Языки OCR:
+- Русский (Tesseract traineddata `rus`)
+- Английский (Tesseract traineddata `eng`)
+- Автоопределение смешанных текстов
+
+## 📄 Лицензия
+
+Проприетарное ПО. Требуется лицензионный файл для активации.
+
+### Сторонние компоненты
+- Tesseract OCR — Apache License 2.0
+- OpenCV — BSD 3-Clause
+- Apache PDFBox — Apache License 2.0
+- ML Kit — Google Terms of Service
+
+## 👥 Авторы
+
+Разработано для корпоративного использования с акцентом на:
+- Соответствие 152-ФЗ (обработка персональных данных)
+- ГОСТ Р ИСО/МЭК 27001
+- Требованиям безопасности банковской сферы
+
+## 📞 Поддержка
+
+Для технической поддержки и получения лицензий:
+- Email: support@example.com
+- Внутренний тикет-трекер: [ссылка]
+
+---
+
+*Версия документа: 1.0*
+*Последнее обновление: 2024*
