@@ -18,7 +18,7 @@ class ImagePreprocessorTest {
     @Before
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        imagePreprocessor = ImagePreprocessor(mockDocumentDetector)
+        imagePreprocessor = ImagePreprocessor()
     }
     
     @Test

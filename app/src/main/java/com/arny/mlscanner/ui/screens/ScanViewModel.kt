@@ -156,26 +156,6 @@ class ScanViewModel(
         _uiState.update { it.copy(error = null) }
     }
 
-    // Backward compatibility
-    fun setCapturedImage(bitmap: Bitmap) = onImageCaptured(bitmap)
-    
-    fun applyCropAndScan(cropRect: CropRect?, settings: ScanSettings) {
-        cropRect?.let { onCropChanged(it) }
-        onStartScanning()
-    }
-
-    val capturedBitmap: Bitmap? get() = originalBitmap
-    val previewImage: StateFlow<Bitmap?> get() = MutableStateFlow(previewSourceBitmap).also { /* preserve for backward compat */ }
-    val recognizedText: StateFlow<com.arny.mlscanner.domain.models.RecognizedText?> get() = MutableStateFlow(_uiState.value.recognizedText)
-    val isScanning: StateFlow<Boolean> get() = MutableStateFlow(_uiState.value.isScanning)
-    val error: StateFlow<String?> get() = MutableStateFlow(_uiState.value.error?.message)
-
-    fun updateSettings(settings: ScanSettings) = onSettingsChanged(settings)
-    fun startScanning() = onStartScanning()
-    fun clear() = onNewScan()
-
-    // Private
-
     private fun applyFiltersDebounced(settings: ScanSettings) {
         val source = previewSourceBitmap ?: return
 
@@ -338,6 +318,29 @@ class ScanViewModel(
         scanJob?.cancel()
         originalBitmap = null
         previewSourceBitmap = null
+    }
+
+    /**
+     * Поворот исходного изображения.
+     * Сбрасывает preview и пересчитывает фильтры.
+     */
+    fun rotateImage(degrees: Float) {
+        val original = originalBitmap ?: return
+
+        val matrix = android.graphics.Matrix().apply { postRotate(degrees) }
+        val rotated = Bitmap.createBitmap(
+            original, 0, 0, original.width, original.height, matrix, true
+        )
+
+        // Заменяем оригинал
+        originalBitmap = rotated
+
+        // Пересоздаём preview
+        val scaled = scaleBitmapSafe(rotated, PREVIEW_MAX_DIMENSION)
+        previewSourceBitmap = scaled
+
+        // Применяем текущие фильтры
+        applyFiltersDebounced(_uiState.value.settings)
     }
 
     override fun onCleared() {

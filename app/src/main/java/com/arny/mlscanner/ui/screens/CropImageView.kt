@@ -46,17 +46,28 @@ fun CropImageViewPreview() {
     )
 }
 
+/**
+ * @param bitmap         Текущее изображение (может меняться при фильтрации)
+ * @param imageId        Уникальный ID исходного изображения.
+ *                        Меняется ТОЛЬКО при новом фото/галерее.
+ *                        НЕ меняется при применении фильтров.
+ *                        Рамка сбрасывается только при смене imageId.
+ * @param minCropSize    Минимальный размер рамки в пикселях bitmap
+ * @param onCropChanged  Callback при изменении рамки
+ */
 @Composable
 fun CropImageView(
     bitmap: ImageBitmap,
     modifier: Modifier = Modifier,
+    imageId: Long = 0L,
+    minCropSize: Float = 20f,
     onCropChanged: (CropRect) -> Unit
 ) {
     val density = LocalDensity.current
     val primaryColor = MaterialTheme.colorScheme.primary
     val maskColor = Color.Black.copy(alpha = 0.6f)
 
-    // Минимальный размер кропа (в пикселях экрана)
+    // Минимальный размер кропа (в пикселях bitmap)
     val minTouchSize = with(density) { 48.dp.toPx() }
 
     // Размер Canvas на экране
@@ -64,7 +75,9 @@ fun CropImageView(
 
     // Состояние кропа в координатах БИТМАПА (0..width, 0..height)
     // Инициализируем полным размером картинки
-    var cropState by remember(bitmap) {
+    // ▶ FIX: cropState привязан к imageId, НЕ к bitmap
+    // Сбрасывается только когда пользователь делает НОВОЕ фото
+    var cropState by remember(imageId) {
         mutableStateOf(
             Rect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
         )
@@ -145,10 +158,9 @@ fun CropImageView(
                     right = newRect.right.coerceIn(0f, bitmap.width.toFloat()),
                     bottom = newRect.bottom.coerceIn(0f, bitmap.height.toFloat())
                 )
-                // Проверка на минимальный размер (чтобы не схлопнулось в 0)
-                // Минимальный размер в пикселях картинки, который соответствует ~48dp на экране
-                val minW = minTouchSize / info.scale
-                val minH = minTouchSize / info.scale
+                // ▶ FIX: Минимальный размер рамки уменьшен до 20px
+                val minW = minCropSize
+                val minH = minCropSize
 
                 if (clamped.width >= minW && clamped.height >= minH) {
                     cropState = clamped
@@ -190,6 +202,43 @@ fun CropImageView(
                 updateCropInBitmapCoords(
                     Rect(cropState.left, cropState.top, cropState.right + dx, cropState.bottom + dy)
                 )
+            }
+
+            // ▶ НОВОЕ: Edge handles (середина стороны) для точной настройки
+            // Top edge
+            CropHandle(
+                offset = Offset((screenRect.left + screenRect.right) / 2, screenRect.top)
+            ) { drag ->
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(Rect(cropState.left, cropState.top + dy,
+                    cropState.right, cropState.bottom))
+            }
+
+            // Bottom edge
+            CropHandle(
+                offset = Offset((screenRect.left + screenRect.right) / 2, screenRect.bottom)
+            ) { drag ->
+                val dy = drag.y / info.scale
+                updateCropInBitmapCoords(Rect(cropState.left, cropState.top,
+                    cropState.right, cropState.bottom + dy))
+            }
+
+            // Left edge
+            CropHandle(
+                offset = Offset(screenRect.left, (screenRect.top + screenRect.bottom) / 2)
+            ) { drag ->
+                val dx = drag.x / info.scale
+                updateCropInBitmapCoords(Rect(cropState.left + dx, cropState.top,
+                    cropState.right, cropState.bottom))
+            }
+
+            // Right edge
+            CropHandle(
+                offset = Offset(screenRect.right, (screenRect.top + screenRect.bottom) / 2)
+            ) { drag ->
+                val dx = drag.x / info.scale
+                updateCropInBitmapCoords(Rect(cropState.left, cropState.top,
+                    cropState.right + dx, cropState.bottom))
             }
         }
     }

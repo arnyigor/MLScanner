@@ -30,7 +30,7 @@ val dataModule = module {
     }
 
     // Preprocessing
-    single { ImagePreprocessor(androidContext()) }
+    single { ImagePreprocessor() }
 
     // OCR Repository (единственная точка доступа к OCR)
     single<OcrRepository> {

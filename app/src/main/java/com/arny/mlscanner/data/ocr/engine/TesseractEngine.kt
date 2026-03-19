@@ -55,8 +55,26 @@ class TesseractEngine(private val context: Context) : OcrEngine {
                     return@withContext false
                 }
 
-                api.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+                 api.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
                 api.setVariable("preserve_interword_spaces", "1")
+
+                // Улучшение распознавания на сложных изображениях
+                api.setVariable("textord_heavy_nr", "1")
+
+                // Не отбрасывать мелкие символы
+                api.setVariable("textord_min_xheight", "6")
+
+                // Улучшение для низкого качества
+                api.setVariable("edges_max_children_per_outline", "40")
+
+                // Не группировать цифры отдельно
+                api.setVariable("classify_bln_numeric_mode", "0")
+
+                // Порог уверенности для вывода (0 = выводить всё)
+                api.setVariable("tessedit_char_blacklist", "")
+
+                // Улучшить для смешанных скриптов
+                api.setVariable("paragraph_text_based", "1")
 
                 tessApi = api
                 ready = true
@@ -71,13 +89,10 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
     override fun isReady(): Boolean = ready
 
-    override suspend fun recognize(bitmap: Bitmap): OcrResult = mutex.withLock {
-        withContext(Dispatchers.Default) {
-            recognizeInternal(bitmap)
-        }
-    }
+    override suspend fun recognize(bitmap: Bitmap, handwrittenMode: Boolean): OcrResult = 
+        mutex.withLock { withContext(Dispatchers.Default) { recognizeInternal(bitmap, handwrittenMode) } }
 
-    private fun recognizeInternal(bitmap: Bitmap): OcrResult {
+    private fun recognizeInternal(bitmap: Bitmap, handwrittenMode: Boolean = false): OcrResult {
         val api = tessApi
         if (api == null || !ready) {
             Log.w(TAG, "Tesseract not ready")
@@ -85,9 +100,30 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         }
 
         val startTime = System.currentTimeMillis()
-        val safeBitmap = ensureSafeBitmap(bitmap)
+
+        val optimizedBitmap = optimizeForOcr(bitmap)
+        val safeBitmap = ensureSafeBitmap(optimizedBitmap)
 
         try {
+            // ▶ УЛУЧШЕНИЕ: Адаптивный PSM
+            val psm = if (handwrittenMode) {
+                // Для рукописного всегда SINGLE_BLOCK
+                Log.d(TAG, "Handwritten mode: PSM_SINGLE_BLOCK")
+                TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+            } else {
+                selectOptimalPsm(safeBitmap)
+            }
+            api.pageSegMode = psm
+
+            // Настройки для рукописного текста (ПОСЛЕ установки PSM)
+            if (handwrittenMode) {
+                api.setVariable("classify_bln_numeric_mode", "0")
+                api.setVariable("textord_heavy_nr", "1")
+                api.setVariable("textord_force_make_prop_words", "0")
+                api.setVariable("tessedit_char_whitelist", "")
+                Log.d(TAG, "Handwritten mode: relaxed settings applied")
+            }
+
             api.setImage(safeBitmap)
 
             val fullText = api.utF8Text.orEmpty()
@@ -123,9 +159,8 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             )
         } finally {
             api.clear()
-            if (safeBitmap !== bitmap) {
-                safeBitmap.recycle()
-            }
+            if (safeBitmap !== bitmap && safeBitmap !== optimizedBitmap) safeBitmap.recycle()
+            if (optimizedBitmap !== bitmap) optimizedBitmap.recycle()
         }
     }
 
@@ -319,5 +354,74 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         tessApi = null
         ready = false
         Log.d(TAG, "Tesseract released")
+    }
+
+    /**
+     * Оптимизация изображения для Tesseract.
+     *
+     * Tesseract лучше всего работает при ~300 DPI.
+     * Если изображение слишком маленькое — увеличиваем.
+     * Если слишком большое — уменьшаем.
+     */
+    private fun optimizeForOcr(bitmap: Bitmap): Bitmap {
+        val maxSide = maxOf(bitmap.width, bitmap.height)
+        val minSide = minOf(bitmap.width, bitmap.height)
+
+        return when {
+            // Слишком маленькое — увеличиваем для лучшего распознавания
+            minSide < 500 -> {
+                val scale = 1500f / minSide
+                Log.d(TAG, "Upscaling small image: ${bitmap.width}x${bitmap.height} " +
+                    "→ scale=$scale")
+                Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * scale).toInt(),
+                    (bitmap.height * scale).toInt(),
+                    true
+                )
+            }
+            // Слишком большое — уменьшаем для скорости
+            maxSide > 4000 -> {
+                val scale = 3000f / maxSide
+                Log.d(TAG, "Downscaling large image: ${bitmap.width}x${bitmap.height} " +
+                    "→ scale=$scale")
+                Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * scale).toInt(),
+                    (bitmap.height * scale).toInt(),
+                    true
+                )
+            }
+            else -> bitmap
+        }
+    }
+
+    /**
+     * Выбор оптимального Page Segmentation Mode.
+     *
+     * PSM_AUTO — хорош для документов с несколькими блоками
+     * PSM_SINGLE_BLOCK — лучше для одного блока текста (фото вывески)
+     * PSM_SINGLE_LINE — для одной строки
+     */
+    private fun selectOptimalPsm(bitmap: Bitmap): Int {
+        val aspectRatio = bitmap.width.toFloat() / bitmap.height
+
+        return when {
+            // Очень вытянутое горизонтально — скорее всего одна строка
+            aspectRatio > 5f -> {
+                Log.d(TAG, "PSM: SINGLE_LINE (aspect=$aspectRatio)")
+                TessBaseAPI.PageSegMode.PSM_SINGLE_LINE
+            }
+            // Небольшое изображение — скорее всего один блок
+            maxOf(bitmap.width, bitmap.height) < 1000 -> {
+                Log.d(TAG, "PSM: SINGLE_BLOCK (small image)")
+                TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+            }
+            // По умолчанию — автоматический
+            else -> {
+                Log.d(TAG, "PSM: AUTO")
+                TessBaseAPI.PageSegMode.PSM_AUTO
+            }
+        }
     }
 }

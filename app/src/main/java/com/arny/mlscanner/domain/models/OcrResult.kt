@@ -60,7 +60,7 @@ package com.arny.mlscanner.domain.models
 
     /** Определяет язык текста автоматически */
     val detectedLanguage: String
-        get() = com.arny.mlscanner.domain.models.OcrLanguage.detectFromText(fullText).tesseractCode
+        get() = OcrLanguage.detectFromText(fullText).tesseractCode
 
     companion object {
         /** Пустой результат */

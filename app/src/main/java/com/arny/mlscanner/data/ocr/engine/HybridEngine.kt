@@ -37,60 +37,93 @@ class HybridEngine(
 
     override fun isReady(): Boolean = tesseract.isReady() || mlkit.isReady()
 
-    override suspend fun recognize(bitmap: Bitmap): OcrResult {
+    override suspend fun recognize(bitmap: Bitmap, handwrittenMode: Boolean): OcrResult {
         val totalStart = System.currentTimeMillis()
 
-        // ▶ ШАГИ ИЗМЕНЕНЫ: Tesseract ПЕРВЫЙ
-
-        // Шаг 1: Tesseract (основной для русского)
+        // ═══ ШАГ 1: Всегда запускаем Tesseract (основной для русского) ═══
         var tessResult: OcrResult? = null
         if (tesseract.isReady()) {
             try {
-                tessResult = tesseract.recognize(bitmap)
-                Log.d(TAG, "Tesseract: conf=${tessResult.averageConfidence}, " +
-                    "words=${tessResult.wordCount}, " +
-                    "text=${tessResult.fullText.take(50)}...")
+                tessResult = tesseract.recognize(bitmap, handwrittenMode)
+                Log.d(TAG, "Tesseract: words=${tessResult.wordCount}, " +
+                    "conf=${tessResult.averageConfidence}, " +
+                    "script=${detectScript(tessResult.fullText)}, " +
+                    "text='${tessResult.fullText.take(60)}...'")
 
-                // Если Tesseract дал хороший результат — сразу возвращаем
-                if (isResultAcceptable(tessResult)) {
+                // Если Tesseract дал кириллицу — сразу возвращаем
+                // НЕ тратим время на ML Kit (он всё равно не умеет русский)
+                if (hasCyrillic(tessResult.fullText)) {
+                    Log.i(TAG, "Cyrillic detected → using Tesseract directly")
                     val totalTime = System.currentTimeMillis() - totalStart
                     return tessResult.copy(
                         processingTimeMs = totalTime,
-                        engineName = "Hybrid → Tesseract"
+                        engineName = "Hybrid → Tesseract (cyrillic)"
                     )
                 }
 
-                Log.d(TAG, "Tesseract result not great, trying ML Kit as supplement...")
+                // Если Tesseract дал хороший результат (даже без кириллицы)
+                if (isResultAcceptable(tessResult)) {
+                    // Проверяем: может ML Kit даст лучше для латиницы?
+                    var mlkitResult: OcrResult? = null
+                    if (mlkit.isReady()) {
+                        try {
+                            mlkitResult = mlkit.recognize(bitmap, handwrittenMode)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "ML Kit failed", e)
+                        }
+                    }
+
+                    // Если ML Kit выдал транслит-мусор — однозначно Tesseract
+                    if (mlkitResult != null && isTranslitGarbage(mlkitResult.fullText)) {
+                        Log.i(TAG, "ML Kit produced translit garbage → using Tesseract")
+                        val totalTime = System.currentTimeMillis() - totalStart
+                        return tessResult.copy(
+                            processingTimeMs = totalTime,
+                            engineName = "Hybrid → Tesseract (anti-translit)"
+                        )
+                    }
+
+                    // Если оба результата нормальные — выбираем лучший
+                    val best = selectBest(tessResult, mlkitResult)
+                    val totalTime = System.currentTimeMillis() - totalStart
+                    return (best ?: tessResult).copy(
+                        processingTimeMs = totalTime,
+                        engineName = "Hybrid → ${best?.engineName ?: "Tesseract"}"
+                    )
+                }
+
+                Log.d(TAG, "Tesseract result not great, trying ML Kit as fallback...")
             } catch (e: Exception) {
                 Log.w(TAG, "Tesseract failed", e)
             }
         }
 
-        // Шаг 2: ML Kit (fallback — только если Tesseract совсем плох)
-        var mlkitResult: OcrResult? = null
+        // ═══ ШАГ 2: Tesseract не дал результата — пробуем ML Kit как fallback ═══
         if (mlkit.isReady()) {
             try {
-                mlkitResult = mlkit.recognize(bitmap)
-                Log.d(TAG, "ML Kit: conf=${mlkitResult.averageConfidence}, " +
-                    "words=${mlkitResult.wordCount}")
+                val mlkitResult = mlkit.recognize(bitmap, handwrittenMode)
+                if (!mlkitResult.isEmpty && !isTranslitGarbage(mlkitResult.fullText)) {
+                    val totalTime = System.currentTimeMillis() - totalStart
+                    return mlkitResult.copy(
+                        processingTimeMs = totalTime,
+                        engineName = "Hybrid → ML Kit (fallback)"
+                    )
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "ML Kit failed", e)
+                Log.w(TAG, "ML Kit fallback failed", e)
             }
         }
 
-        // Шаг 3: Выбор лучшего
-        val best = selectBest(tessResult, mlkitResult)
+        // ═══ Ничего не сработало ═══
         val totalTime = System.currentTimeMillis() - totalStart
-
-        return (best ?: OcrResult.EMPTY).copy(
+        return (tessResult ?: OcrResult.EMPTY).copy(
             processingTimeMs = totalTime,
-            engineName = "Hybrid → ${best?.engineName ?: "None"}"
+            engineName = "Hybrid → ${tessResult?.engineName ?: "None"}"
         )
     }
 
     /**
      * Проверка: приемлем ли результат Tesseract.
-     * Порог ниже чем раньше — Tesseract уже даёт русский текст.
      */
     private fun isResultAcceptable(result: OcrResult): Boolean {
         if (result.isEmpty) return false
@@ -100,11 +133,107 @@ class HybridEngine(
     }
 
     /**
-     * Выбор лучшего результата.
+     * Есть ли в тексте кириллические символы.
+     */
+    private fun hasCyrillic(text: String): Boolean {
+        return text.any { it in '\u0400'..'\u04FF' }
+    }
+
+    /**
+     * Определение "скрипта" текста.
+     */
+    private fun detectScript(text: String): String {
+        val letters = text.filter { it.isLetter() }
+        if (letters.isEmpty()) return "none"
+        val cyr = letters.count { it in '\u0400'..'\u04FF' }
+        val lat = letters.count { it in 'A'..'Z' || it in 'a'..'z' }
+        return when {
+            cyr > lat -> "cyrillic"
+            lat > cyr -> "latin"
+            else -> "mixed"
+        }
+    }
+
+    /**
+     * Детекция "транслит-мусора" — когда ML Kit Latin model
+     * пытается прочитать кириллицу и выдаёт псевдо-латиницу.
      *
-     * ▶ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ:
-     * Если в результате есть кириллица — отдаём предпочтение Tesseract,
-     * потому что ML Kit Latin превращает кириллицу в мусор.
+     * Признаки:
+     * 1. Много заглавных букв ВНУТРИ слов: "MaTeMaTHKa", "IluCbMO"
+     * 2. Характерные биграммы: "bI", "Kb", "IO", "3e", "CTp", "HK"
+     * 3. Необычное распределение регистров
+     * 4. Высокая доля согласных без гласных
+     */
+    private fun isTranslitGarbage(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (text.length < 3) return false
+
+        val words = text.split("\\s+".toRegex())
+            .filter { it.length >= 3 && it.any { c -> c.isLetter() } }
+        if (words.isEmpty()) return false
+
+        var totalScore = 0f
+
+        for (word in words) {
+            var wordScore = 0f
+
+            // Проверка 1: Заглавные буквы в середине слова
+            // "MaTeMaTHKa" → M,T,M,T,H,K — 6 заглавных внутри
+            val letterPart = word.filter { it.isLetter() }
+            if (letterPart.length >= 3) {
+                val middle = letterPart.substring(1, letterPart.length - 1)
+                val upperInMiddle = middle.count { it.isUpperCase() }
+                val upperRatio = upperInMiddle.toFloat() / middle.length
+
+                if (upperRatio > 0.4f && middle.length >= 2) {
+                    wordScore += 0.5f
+                }
+            }
+
+            // Проверка 2: Характерные транслит-биграммы
+            val translitBigrams = listOf(
+                "bI", "Kb", "IO", "bl", "3e", "3a", "YI", "Hl",
+                "Hb", "CTp", "lO", "HK", "Bb", "Tb", "Cb",
+                "Pb", "nb", "ib", "ob", "yb", "eb",
+                "bM", "bH", "bC", "bK", "bT",
+                "cT", "cK", "cM", "cH",
+                "KO", "KA", "KY", "KH",
+                "HO", "HA", "HY"
+            )
+            val upperWord = word.uppercase()
+            val bigramHits = translitBigrams.count { bigram ->
+                word.contains(bigram) || upperWord.contains(bigram.uppercase())
+            }
+            if (bigramHits >= 1) {
+                wordScore += 0.3f * bigramHits.coerceAtMost(3)
+            }
+
+            // Проверка 3: Слово выглядит как "не-английское" латинское
+            // Нет гласных или очень мало (русские согласные маппятся в латинские согласные)
+            if (letterPart.length >= 4) {
+                val vowels = letterPart.lowercase().count { it in "aeiouy" }
+                val vowelRatio = vowels.toFloat() / letterPart.length
+                if (vowelRatio < 0.15f) {
+                    wordScore += 0.4f // Очень мало гласных для латиницы
+                }
+            }
+
+            totalScore += wordScore
+        }
+
+        val avgScore = totalScore / words.size
+        val isGarbage = avgScore > 0.3f
+
+        if (isGarbage) {
+            Log.d(TAG, "Translit garbage detected (score=$avgScore): " +
+                "'${text.take(50)}...'")
+        }
+
+        return isGarbage
+    }
+
+    /**
+     * Выбор лучшего результата (только для НЕ-транслитного текста).
      */
     private fun selectBest(tess: OcrResult?, mlkit: OcrResult?): OcrResult? {
         if (tess == null && mlkit == null) return null
@@ -113,21 +242,6 @@ class HybridEngine(
         if (tess.isEmpty && !mlkit.isEmpty) return mlkit
         if (mlkit.isEmpty && !tess.isEmpty) return tess
 
-        // Если Tesseract нашёл кириллицу — однозначно он
-        val hasCyrillic = tess.fullText.any { it in '\u0400'..'ӿ' }
-        if (hasCyrillic) {
-            Log.d(TAG, "Cyrillic detected in Tesseract → using Tesseract")
-            return tess
-        }
-
-        // Если ML Kit нашёл подозрительный "транслит" — используем Tesseract
-        val mlkitLooksLikeTranslit = detectTranslit(mlkit.fullText)
-        if (mlkitLooksLikeTranslit) {
-            Log.d(TAG, "ML Kit looks like translit → using Tesseract")
-            return tess
-        }
-
-        // Для чисто латинского текста — сравниваем по score
         val tScore = score(tess)
         val mScore = score(mlkit)
 
@@ -135,72 +249,17 @@ class HybridEngine(
         return if (tScore >= mScore) tess else mlkit
     }
 
-    /**
-     * Детекция "транслита" — когда ML Kit выдаёт латиницу
-     * вместо кириллицы.
-     *
-     * Признаки транслита:
-     * - Необычное смешение регистров: «IluCbMO», «MaTeMaTHKa»
-     * - Много заглавных букв в середине слова
-     * - Специфические паттерны: «Kb», «bI», «IO»
-     */
-    private fun detectTranslit(text: String): Boolean {
-        if (text.isBlank()) return false
-
-        // Считаем слова с необычным смешением регистров
-        val words = text.split("\\s+".toRegex()).filter { it.length >= 3 }
-        if (words.isEmpty()) return false
-
-        var suspiciousWords = 0
-        for (word in words) {
-            val hasLower = word.any { it.isLowerCase() }
-            val hasUpper = word.any { it.isUpperCase() }
-
-            if (hasLower && hasUpper) {
-                // Заглавная НЕ только первая буква
-                val upperInMiddle = word.drop(1).count { it.isUpperCase() }
-                if (upperInMiddle >= 2) {
-                    suspiciousWords++
-                }
-            }
-        }
-
-        val ratio = suspiciousWords.toFloat() / words.size
-
-        // Специфические паттерны кириллицы→латиницы
-        val translitPatterns = listOf(
-            "bI", "Kb", "IO", "bl", "3e", "3a",
-            "YI", "Hl", "Hb", "CTp", "lO"
-        )
-        val hasTranslitPatterns = translitPatterns.any { text.contains(it) }
-
-        val isSuspicious = ratio > 0.3f || hasTranslitPatterns
-        if (isSuspicious) {
-            Log.d(TAG, "Translit detection: ratio=$ratio, " +
-                "patterns=$hasTranslitPatterns → SUSPICIOUS")
-        }
-
-        return isSuspicious
-    }
-
     private fun score(result: OcrResult): Float {
-        val confScore = result.averageConfidence * 0.5f
-        val wordScore = (result.wordCount.coerceAtMost(50) / 50f) * 0.2f
-
+        val wordScore = (result.wordCount.coerceAtMost(30) / 30f) * 0.3f
         val cleanChars = result.fullText.count {
-            it.isLetterOrDigit() || it.isWhitespace() || it in ",.;:!?()-\"'«»—–/"
+            it.isLetterOrDigit() || it.isWhitespace() || it in ".,;:!?()-\"'«»—–/"
         }
         val cleanScore = if (result.fullText.isNotEmpty()) {
-            (cleanChars.toFloat() / result.fullText.length) * 0.15f
+            (cleanChars.toFloat() / result.fullText.length) * 0.4f
         } else 0f
+        val lengthScore = (result.fullText.length.coerceAtMost(200) / 200f) * 0.3f
 
-        val cyrillicChars = result.fullText.count { it in '\u0400'..'ӿ' }
-        val cyrillicScore = if (result.fullText.isNotEmpty()) {
-            (cyrillicChars.toFloat() / result.fullText.length)
-                .coerceAtMost(1f) * 0.15f
-        } else 0f
-
-        return confScore + wordScore + cleanScore + cyrillicScore
+        return wordScore + cleanScore + lengthScore
     }
 
     override fun release() {

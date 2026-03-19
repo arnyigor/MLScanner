@@ -6,6 +6,7 @@ package com.arny.mlscanner.domain.mappers
 
 import com.arny.mlscanner.domain.formatters.TextFormatter
 import com.arny.mlscanner.domain.models.BoundingBox
+import com.arny.mlscanner.domain.models.LanguageDetector
 import com.arny.mlscanner.domain.models.OcrLanguage
 import com.arny.mlscanner.domain.models.OcrResult
 import com.arny.mlscanner.domain.models.RecognizedText
@@ -31,8 +32,6 @@ class OcrResultMapper(
      */
     fun toRecognizedText(ocrResult: OcrResult): RecognizedText {
         val formattedText = textFormatter.format(ocrResult.fullText)
-        // Язык уже определён в OcrResult.detectedLanguage
-        val language = ocrResult.detectedLanguage
 
         val blockInfos = ocrResult.blocks.map { block ->
             TextBlockInfo(
@@ -54,7 +53,7 @@ class OcrResultMapper(
             formattedText = formattedText,
             blocks = blockInfos,
             confidence = ocrResult.averageConfidence,
-            detectedLanguage = language.toString()
+            detectedLanguage = ocrResult.detectedLanguage
         )
     }
 

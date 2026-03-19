@@ -49,7 +49,7 @@ class MLKitEngine : OcrEngine {
 
     override fun isReady(): Boolean = ready
 
-    override suspend fun recognize(bitmap: Bitmap): OcrResult {
+    override suspend fun recognize(bitmap: Bitmap, handwrittenMode: Boolean): OcrResult {
         val rec = recognizer
         if (rec == null || !ready) {
             Log.w(TAG, "ML Kit not ready, returning empty")
@@ -62,7 +62,7 @@ class MLKitEngine : OcrEngine {
         return try {
             val visionText = processImage(rec, inputImage)
             val elapsed = System.currentTimeMillis() - startTime
-            mapToOcrResult(visionText, elapsed, bitmap.width, bitmap.height)
+            mapToOcrResult(visionText, elapsed, bitmap.width, bitmap.height, handwrittenMode)
         } catch (e: Exception) {
             Log.e(TAG, "ML Kit recognition error", e)
             OcrResult.EMPTY.copy(
@@ -89,11 +89,18 @@ class MLKitEngine : OcrEngine {
         text: Text,
         elapsedMs: Long,
         imgW: Int,
-        imgH: Int
+        imgH: Int,
+        handwrittenMode: Boolean = false
     ): OcrResult {
         val blocks = text.textBlocks.map { mlBlock ->
             val lines = mlBlock.lines.map { mlLine ->
                 val words = mlLine.elements.map { mlElement ->
+                    // Для рукописного текста — снижаем confidence (он менее уверенный)
+                    val wordConf = if (handwrittenMode) {
+                        estimateConfidence(mlElement.text) * 0.7f
+                    } else {
+                        estimateConfidence(mlElement.text)
+                    }
                 TextWord(
                     text = mlElement.text,
                     boundingBox = mlElement.boundingBox?.let {
@@ -104,7 +111,7 @@ class MLKitEngine : OcrEngine {
                             it.bottom.toFloat()
                         )
                     } ?: BoundingBox.EMPTY,
-                    confidence = estimateConfidence(mlElement.text)
+                    confidence = wordConf
                 )
                 }
 
@@ -124,16 +131,21 @@ class MLKitEngine : OcrEngine {
             }
 
              TextBlock(
-                 text = mlBlock.text,
-                 boundingBox = mlBlock.boundingBox?.let {
-                     BoundingBox(
-                         it.left.toFloat(), it.top.toFloat(),
-                         it.right.toFloat(), it.bottom.toFloat()
-                     )
-                 } ?: BoundingBox.EMPTY,
-                 lines = lines,
-                 confidence = estimateConfidence(mlBlock.text)
-             )
+                text = mlBlock.text,
+                boundingBox = mlBlock.boundingBox?.let {
+                    BoundingBox(
+                        it.left.toFloat(), it.top.toFloat(),
+                        it.right.toFloat(), it.bottom.toFloat()
+                    )
+                } ?: BoundingBox.EMPTY,
+                lines = lines,
+                confidence = if (handwrittenMode) {
+                    // Рукописный текст — снижаем confidence блока
+                    estimateConfidence(mlBlock.text) * 0.7f
+                } else {
+                    estimateConfidence(mlBlock.text)
+                }
+            )
         }
 
         val fullText = EngineResultMapper.buildFullTextFromBlocks(blocks)

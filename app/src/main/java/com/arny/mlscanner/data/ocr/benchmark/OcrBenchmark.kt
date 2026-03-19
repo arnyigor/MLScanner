@@ -92,7 +92,7 @@ object OcrBenchmark {
         ocrRepository: OcrRepository,
         onProgress: (String) -> Unit
     ): BenchmarkResult = withContext(Dispatchers.Default) {
-        val imagePreprocessor = ImagePreprocessor(context)
+        val imagePreprocessor = ImagePreprocessor()
         val testResults = mutableListOf<BenchmarkResult.TestResult>()
         var totalCharAcc = 0f
         var totalWordAcc = 0f

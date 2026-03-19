@@ -1,7 +1,13 @@
+// ============================================================
+// data/preprocessing/ImagePreprocessor.kt — ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ============================================================
 package com.arny.mlscanner.data.preprocessing
 
-import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.arny.mlscanner.domain.models.ScanSettings
@@ -13,11 +19,11 @@ import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
 
-class ImagePreprocessor(private val context: Context) {
+class ImagePreprocessor {
 
     companion object {
         private const val TAG = "ImagePreprocessor"
-        private const val BRIGHTNESS_DARK_THRESHOLD = 100.0
+        private const val BRIGHTNESS_DARK_THRESHOLD = 80.0
         private const val BILATERAL_DIAMETER = 5
         private const val BILATERAL_SIGMA = 75.0
         private const val MIN_SKEW_ANGLE = 0.5
@@ -29,14 +35,22 @@ class ImagePreprocessor(private val context: Context) {
         fun ensureOpenCvInitialized(): Boolean {
             if (openCvInitialized) return true
             return try {
-                org.opencv.android.OpenCVLoader.initLocal()
-                Log.i(TAG, "OpenCV initialized successfully")
-                openCvInitialized = true
-                true
+                val result = org.opencv.android.OpenCVLoader.initLocal()
+                Log.i(TAG, "OpenCV initialized: $result")
+                openCvInitialized = result
+                result
             } catch (e: Exception) {
-                Log.e(TAG, "OpenCV init failed", e)
-                openCvInitialized = false
-                false
+                try {
+                    @Suppress("DEPRECATION")
+                    val result = org.opencv.android.OpenCVLoader.initDebug()
+                    Log.i(TAG, "OpenCV initDebug: $result")
+                    openCvInitialized = result
+                    result
+                } catch (e2: Exception) {
+                    Log.e(TAG, "OpenCV init failed completely", e2)
+                    openCvInitialized = false
+                    false
+                }
             }
         }
     }
@@ -45,50 +59,239 @@ class ImagePreprocessor(private val context: Context) {
         ensureOpenCvInitialized()
     }
 
+    // ================================================================
+    // PUBLIC API
+    // ================================================================
+
+    /**
+     * Полный pipeline для OCR: deskew + grayscale + фильтры.
+     * Результат — оптимизированный для Tesseract (grayscale).
+     * НЕ используется для preview!
+     */
     fun prepareBaseImage(bitmap: Bitmap, settings: ScanSettings): Bitmap {
         if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
         if (!openCvInitialized) return bitmap
 
-        val source = if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val source = if (bitmap.isMutable) bitmap
+        else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-        var deskewed = source
+        var processed = source
         if (settings.autoRotateEnabled) {
             try {
-                deskewed = deskew(source)
+                processed = deskew(source)
             } catch (e: Exception) {
-                Log.w(TAG, "Deskew failed, using original", e)
+                Log.w(TAG, "Deskew failed", e)
             }
         }
 
-        return applyFilters(deskewed, settings)
+        // Для OCR — полный pipeline с grayscale
+        return applyOcrFilters(processed, settings)
     }
 
+    /**
+     * Фильтры для LIVE PREVIEW.
+     *
+     * КЛЮЧЕВОЕ ОТЛИЧИЕ от prepareBaseImage:
+     * - Работает с ЦВЕТНЫМ изображением (не grayscale)
+     * - Использует Android ColorMatrix (быстрее OpenCV для простых операций)
+     * - НЕ делает инверсию тёмного фона
+     * - НЕ делает бинаризацию (для preview бессмысленно)
+     *
+     * Это гарантирует что preview выглядит предсказуемо
+     * и пользователь видит эффект фильтров на ЦВЕТНОМ изображении.
+     */
     fun applyFiltersOnly(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
-        if (!openCvInitialized) return baseBitmap
-        return applyFilters(baseBitmap, settings)
+        return applyPreviewFilters(baseBitmap, settings)
     }
 
-    private fun applyFilters(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
+    // ================================================================
+    // PREVIEW FILTERS — цветные, быстрые, предсказуемые
+    // ================================================================
+
+    /**
+     * Фильтры для preview — работают с ЦВЕТНЫМ изображением.
+     * Используют Android Canvas/ColorMatrix — быстро и предсказуемо.
+     */
+    private fun applyPreviewFilters(source: Bitmap, settings: ScanSettings): Bitmap {
+        val contrast = settings.contrastLevel ?: 1.0f
+        val brightness = settings.brightnessLevel ?: 0f
+        val sharpen = settings.sharpenLevel ?: 0f
+
+        // Если все параметры дефолтные — возвращаем source как есть
+        val hasChanges = contrast != 1.0f ||
+                brightness != 0f ||
+                sharpen > 0f ||
+                settings.denoiseEnabled ||
+                settings.binarizationEnabled
+
+        if (!hasChanges) return source
+
+        var result = source
+
+        // Шаг 1: Контраст + Яркость (ColorMatrix — быстро и безопасно)
+        if (contrast != 1.0f || brightness != 0f) {
+            result = applyContrastBrightness(result, contrast, brightness)
+        }
+
+        // Шаг 2: Резкость (OpenCV если доступен, иначе пропускаем)
+        if (sharpen > 0f && openCvInitialized) {
+            val sharpened = applyColorSharpen(result, sharpen)
+            if (sharpened != null) {
+                if (result !== source) result.recycle()
+                result = sharpened
+            }
+        }
+
+        // Шаг 3: Бинаризация для preview (если включена)
+        if (settings.binarizationEnabled && openCvInitialized) {
+            val binarized = applyPreviewBinarization(result)
+            if (binarized != null) {
+                if (result !== source) result.recycle()
+                result = binarized
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * Контраст + Яркость через Android ColorMatrix.
+     * Работает с ЦВЕТНЫМ изображением.
+     * Всегда возвращает НОВЫЙ bitmap.
+     */
+    private fun applyContrastBrightness(
+        source: Bitmap,
+        contrast: Float,
+        brightness: Float
+    ): Bitmap {
+        val result = Bitmap.createBitmap(
+            source.width, source.height, Bitmap.Config.ARGB_8888
+        )
+        val canvas = Canvas(result)
+
+        // ColorMatrix формула:
+        // R' = contrast * R + translate
+        // G' = contrast * G + translate
+        // B' = contrast * B + translate
+        // translate = brightness + (1 - contrast) * 128
+        //
+        // При contrast=1.0, brightness=0 → идентичное преобразование
+        // При contrast=1.5 → усиление контраста (тёмное темнее, светлое светлее)
+        // При contrast=0.5 → ослабление контраста (всё к серому)
+        val translate = brightness + (1f - contrast) * 128f
+
+        val cm = ColorMatrix(floatArrayOf(
+            contrast, 0f, 0f, 0f, translate,
+            0f, contrast, 0f, 0f, translate,
+            0f, 0f, contrast, 0f, translate,
+            0f, 0f, 0f, 1f, 0f
+        ))
+
+        val paint = Paint().apply {
+            colorFilter = ColorMatrixColorFilter(cm)
+        }
+
+        canvas.drawBitmap(source, 0f, 0f, paint)
+        return result
+    }
+
+    /**
+     * Резкость на ЦВЕТНОМ изображении через OpenCV.
+     */
+    private fun applyColorSharpen(source: Bitmap, level: Float): Bitmap? {
+        val mat = Mat()
+        val kernel = Mat(3, 3, CvType.CV_32F)
+
+        return try {
+            Utils.bitmapToMat(source, mat)
+
+            val center = 5f + level
+            kernel.put(0, 0, floatArrayOf(
+                0f, -1f, 0f,
+                -1f, center, -1f,
+                0f, -1f, 0f
+            ))
+            Imgproc.filter2D(mat, mat, -1, kernel)
+
+            val result = Bitmap.createBitmap(
+                mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888
+            )
+            Utils.matToBitmap(mat, result)
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Color sharpen failed", e)
+            null
+        } finally {
+            mat.release()
+            kernel.release()
+        }
+    }
+
+    /**
+     * Бинаризация для preview — конвертирует в ч/б.
+     */
+    private fun applyPreviewBinarization(source: Bitmap): Bitmap? {
+        val mat = Mat()
+        val gray = Mat()
+
+        return try {
+            Utils.bitmapToMat(source, mat)
+            Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
+            Imgproc.threshold(
+                gray, gray, 0.0, 255.0,
+                Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
+            )
+
+            val result = Bitmap.createBitmap(
+                gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888
+            )
+            Utils.matToBitmap(gray, result)
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Preview binarization failed", e)
+            null
+        } finally {
+            mat.release()
+            gray.release()
+        }
+    }
+
+    // ================================================================
+    // OCR FILTERS — grayscale, оптимизированные для Tesseract
+    // ================================================================
+
+    /**
+     * Полный pipeline для OCR (grayscale + все оптимизации).
+     */
+    private fun applyOcrFilters(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
         val mat = Mat()
         val gray = Mat()
 
         try {
             Utils.bitmapToMat(baseBitmap, mat)
 
-            if (mat.channels() == 1) mat.copyTo(gray)
-            else Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
+            if (mat.channels() == 1) {
+                mat.copyTo(gray)
+            } else {
+                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
+            }
 
+            // Инверсия тёмного фона (только для OCR)
             val needsInversion = isDarkBackground(gray)
             if (needsInversion) {
+                Log.d(TAG, "OCR: Dark background → inverting")
                 Core.bitwise_not(gray, gray)
             }
 
+            // Денойзинг
             if (settings.denoiseEnabled) {
                 val temp = Mat()
                 try {
                     Imgproc.bilateralFilter(
-                        gray, temp, BILATERAL_DIAMETER,
-                        BILATERAL_SIGMA, BILATERAL_SIGMA
+                        gray, temp,
+                        BILATERAL_DIAMETER,
+                        BILATERAL_SIGMA,
+                        BILATERAL_SIGMA
                     )
                     temp.copyTo(gray)
                 } finally {
@@ -96,18 +299,21 @@ class ImagePreprocessor(private val context: Context) {
                 }
             }
 
-            val contrast = settings.contrastLevel
-            val brightness = settings.brightnessLevel
+            // Контраст + Яркость
+            val contrast = settings.contrastLevel ?: 1.0f
+            val brightness = settings.brightnessLevel ?: 0f
             if (contrast != 1.0f || brightness != 0f) {
                 gray.convertTo(gray, -1, contrast.toDouble(), brightness.toDouble())
             }
 
-            if (settings.sharpenLevel > 0f) {
-                applySharpen(gray, settings.sharpenLevel)
+            // Резкость
+            val sharpen = settings.sharpenLevel ?: 0f
+            if (sharpen > 0f) {
+                applyGraySharpen(gray, sharpen)
             }
 
-            val forceBinarize = needsInversion
-            if (settings.binarizationEnabled || forceBinarize) {
+            // Бинаризация
+            if (settings.binarizationEnabled) {
                 Imgproc.threshold(
                     gray, gray, 0.0, 255.0,
                     Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
@@ -121,7 +327,7 @@ class ImagePreprocessor(private val context: Context) {
             return result
 
         } catch (e: Exception) {
-            Log.e(TAG, "Filter pipeline failed", e)
+            Log.e(TAG, "OCR filter pipeline failed", e)
             return baseBitmap
         } finally {
             gray.release()
@@ -130,8 +336,28 @@ class ImagePreprocessor(private val context: Context) {
     }
 
     private fun isDarkBackground(grayMat: Mat): Boolean {
-        return Core.mean(grayMat).`val`[0] < BRIGHTNESS_DARK_THRESHOLD
+        val mean = Core.mean(grayMat).`val`[0]
+        return mean < BRIGHTNESS_DARK_THRESHOLD
     }
+
+    private fun applyGraySharpen(mat: Mat, level: Float) {
+        val kernel = Mat(3, 3, CvType.CV_32F)
+        try {
+            val center = 5f + level
+            kernel.put(0, 0, floatArrayOf(
+                0f, -1f, 0f,
+                -1f, center, -1f,
+                0f, -1f, 0f
+            ))
+            Imgproc.filter2D(mat, mat, -1, kernel)
+        } finally {
+            kernel.release()
+        }
+    }
+
+    // ================================================================
+    // DESKEW
+    // ================================================================
 
     private fun deskew(source: Bitmap): Bitmap {
         val mat = Mat()
@@ -147,7 +373,9 @@ class ImagePreprocessor(private val context: Context) {
                 rotMat.release()
             }
 
-            val result = createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
+            val result = createBitmap(
+                mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888
+            )
             Utils.matToBitmap(mat, result)
             return result
         } catch (e: Exception) {
@@ -163,46 +391,31 @@ class ImagePreprocessor(private val context: Context) {
         val lines = Mat()
         try {
             Imgproc.Canny(mat, edges, 50.0, 150.0)
-            Imgproc.HoughLines(edges, lines, 1.0, Math.PI / 180, HOUGH_THRESHOLD)
+            Imgproc.HoughLines(
+                edges, lines, 1.0, Math.PI / 180, HOUGH_THRESHOLD
+            )
 
             if (lines.rows() == 0) return null
 
-            val horizontalAngles = mutableListOf<Double>()
+            val angles = mutableListOf<Double>()
             val count = lines.rows().coerceAtMost(20)
             for (i in 0 until count) {
                 val rhoTheta = lines.get(i, 0)
                 val thetaDeg = Math.toDegrees(rhoTheta[1]) - 90.0
                 if (abs(thetaDeg) < MAX_SKEW_ANGLE) {
-                    horizontalAngles.add(thetaDeg)
+                    angles.add(thetaDeg)
                 }
             }
 
-            if (horizontalAngles.isEmpty()) return null
+            if (angles.isEmpty()) return null
 
-            val sorted = horizontalAngles.sorted()
+            val sorted = angles.sorted()
             val median = sorted[sorted.size / 2]
 
             return if (abs(median) > MIN_SKEW_ANGLE) median else null
         } finally {
             edges.release()
             lines.release()
-        }
-    }
-
-    private fun applySharpen(mat: Mat, level: Float) {
-        val kernel = Mat(3, 3, CvType.CV_32F)
-        try {
-            val center = 5f + level
-            kernel.put(
-                0, 0, floatArrayOf(
-                    0f, -1f, 0f,
-                    -1f, center, -1f,
-                    0f, -1f, 0f
-                )
-            )
-            Imgproc.filter2D(mat, mat, -1, kernel)
-        } finally {
-            kernel.release()
         }
     }
 }

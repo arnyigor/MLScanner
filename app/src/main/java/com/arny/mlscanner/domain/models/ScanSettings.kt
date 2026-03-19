@@ -19,20 +19,23 @@ package com.arny.mlscanner.domain.models
  * @property denoiseEnabled    Включить шумоподавление
  * @property binarizationEnabled Включить бинаризацию (Ч/Б)
  * @property autoRotateEnabled Автоматическая коррекция ориентации
+ * @property handwrittenMode   Режим рукописного текста
  * @property language          Язык OCR
  * @property confidenceThreshold Минимальная уверенность для включения
  *                              блока в результат. Диапазон: [0.0, 1.0]
  */
-data class ScanSettings(
-    val contrastLevel: Float = DEFAULT_CONTRAST,
-    val brightnessLevel: Float = DEFAULT_BRIGHTNESS,
-    val sharpenLevel: Float = DEFAULT_SHARPEN,
-    val denoiseEnabled: Boolean = false,
-    val binarizationEnabled: Boolean = false,
-    val autoRotateEnabled: Boolean = true,
-    val language: OcrLanguage = OcrLanguage.DEFAULT,
-    val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
-) {
+ data class ScanSettings(
+     val contrastLevel: Float = DEFAULT_CONTRAST,
+     val brightnessLevel: Float = DEFAULT_BRIGHTNESS,
+     val sharpenLevel: Float = DEFAULT_SHARPEN,
+     val denoiseEnabled: Boolean = false,
+     val binarizationEnabled: Boolean = false,
+     val autoRotateEnabled: Boolean = true,
+     // ▶ НОВОЕ: Режим рукописного текста
+     val handwrittenMode: Boolean = false,
+     val language: OcrLanguage = OcrLanguage.DEFAULT,
+     val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
+ ) {
     init {
         require(contrastLevel in 0.1f..5.0f) {
             "contrastLevel must be in [0.1, 5.0], got $contrastLevel"

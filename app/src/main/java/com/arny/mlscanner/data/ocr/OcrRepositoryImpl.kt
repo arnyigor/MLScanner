@@ -86,7 +86,7 @@ class OcrRepositoryImpl(
 
         return try {
             // Используем Hybrid по умолчанию
-            hybridEngine.recognize(processed)
+            hybridEngine.recognize(processed, settings.handwrittenMode)
         } finally {
             if (processed !== bitmap) {
                 processed.recycle()
@@ -113,7 +113,7 @@ class OcrRepositoryImpl(
         }
 
         return try {
-            engine.recognize(processed)
+            engine.recognize(processed, settings.handwrittenMode)
         } finally {
             if (processed !== bitmap) processed.recycle()
         }

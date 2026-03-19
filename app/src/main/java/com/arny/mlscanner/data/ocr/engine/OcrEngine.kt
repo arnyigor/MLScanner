@@ -20,7 +20,7 @@ interface OcrEngine {
     fun isReady(): Boolean
 
     /** Распознать текст */
-    suspend fun recognize(bitmap: Bitmap): OcrResult
+    suspend fun recognize(bitmap: Bitmap, handwrittenMode: Boolean = false): OcrResult
 
     /** Освободить ресурсы */
     fun release()
