@@ -110,11 +110,13 @@ class OcrRepositoryImpl(
             else -> hybridEngine
         }
 
-        return try {
-            engine.recognize(processed, settings.handwrittenMode)
-        } finally {
-            if (processed !== bitmap) processed.recycle()
+        val result = engine.recognize(processed, settings.handwrittenMode)
+
+        if (processed !== bitmap && !processed.isRecycled) {
+            processed.recycle()
         }
+
+        return result
     }
 
     override fun isReady(): Boolean = initialized

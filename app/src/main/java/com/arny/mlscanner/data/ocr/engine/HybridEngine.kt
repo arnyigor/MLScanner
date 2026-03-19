@@ -52,17 +52,35 @@ class HybridEngine(
             }
         }
 
-        // Шаг 2: ML Kit как fallback (только если Tesseract пуст)
-        if (mlkit.isReady()) {
+        // Шаг 2: ML Kit fallback
+        if (mlkit.isReady() && !bitmap.isRecycled) {
             try {
                 val mlkitResult = mlkit.recognize(bitmap, handwrittenMode)
-                Log.d(TAG, "ML Kit fallback: words=${mlkitResult.wordCount}")
+                Log.d(TAG, "ML Kit fallback: words=${mlkitResult.wordCount}, " +
+                    "text='${mlkitResult.fullText.take(50)}...'")
 
-                if (!mlkitResult.isEmpty && !isTranslitGarbage(mlkitResult.fullText)) {
+                if (!mlkitResult.isEmpty) {
                     val totalTime = System.currentTimeMillis() - totalStart
-                    return mlkitResult.copy(
+
+                    // Если Tesseract пуст — принимаем ML Kit как есть
+                    if (tessResult == null || tessResult.isEmpty) {
+                        Log.d(TAG, "Tesseract empty → using ML Kit")
+                        return mlkitResult.copy(
+                            processingTimeMs = totalTime,
+                            engineName = "Hybrid → ML Kit (tess empty)"
+                        )
+                    }
+
+                    // Если Tesseract дал хоть что-то — сравниваем
+                    val best = if (tessResult.wordCount > mlkitResult.wordCount) {
+                        tessResult
+                    } else {
+                        mlkitResult
+                    }
+
+                    return best.copy(
                         processingTimeMs = totalTime,
-                        engineName = "Hybrid → ML Kit (fallback)"
+                        engineName = "Hybrid → ${best.engineName}"
                     )
                 }
             } catch (e: Exception) {
@@ -76,36 +94,6 @@ class HybridEngine(
             processingTimeMs = totalTime,
             engineName = "Hybrid → ${tessResult?.engineName ?: "None"}"
         )
-    }
-
-    private fun isTranslitGarbage(text: String): Boolean {
-        if (text.isBlank() || text.length < 3) return false
-
-        val words = text.split("\\s+".toRegex())
-            .filter { it.length >= 3 && it.any { c -> c.isLetter() } }
-        if (words.isEmpty()) return false
-
-        var suspiciousCount = 0
-
-        for (word in words) {
-            val letters = word.filter { it.isLetter() }
-            if (letters.length < 3) continue
-
-            val middle = letters.substring(1, letters.length - 1)
-            val upperInMiddle = middle.count { it.isUpperCase() }
-            if (upperInMiddle.toFloat() / middle.length > 0.4f) {
-                suspiciousCount++
-                continue
-            }
-
-            val vowels = letters.lowercase().count { it in "aeiouy" }
-            if (letters.length >= 4 && vowels.toFloat() / letters.length < 0.15f) {
-                suspiciousCount++
-            }
-        }
-
-        val ratio = suspiciousCount.toFloat() / words.size
-        return ratio > 0.3f
     }
 
     override fun release() {

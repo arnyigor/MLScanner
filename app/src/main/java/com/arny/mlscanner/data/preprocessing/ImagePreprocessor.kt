@@ -73,17 +73,12 @@ class ImagePreprocessor {
         val source = if (bitmap.isMutable) bitmap
         else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-        var processed = source
-        if (settings.autoRotateEnabled) {
-            try {
-                processed = deskew(source)
-            } catch (e: Exception) {
-                Log.w(TAG, "Deskew failed", e)
-            }
-        }
+        // Deskew ОТКЛЮЧЁН:
+        // HoughLines часто детектирует ложные линии (рамки таблиц, границы фото)
+        // и поворачивает изображение на неправильный угол → Tesseract не может прочитать.
+        // Tesseract 4 LSTM сам умеет компенсировать небольшой наклон.
 
-        // Для OCR — только grayscale + инверсия, БЕЗ пользовательских настроек
-        return applyOcrFilters(processed)
+        return applyOcrFilters(source)
     }
 
     /**
