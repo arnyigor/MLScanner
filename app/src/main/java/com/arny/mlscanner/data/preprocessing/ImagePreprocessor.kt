@@ -24,8 +24,6 @@ class ImagePreprocessor {
     companion object {
         private const val TAG = "ImagePreprocessor"
         private const val BRIGHTNESS_DARK_THRESHOLD = 80.0
-        private const val BILATERAL_DIAMETER = 5
-        private const val BILATERAL_SIGMA = 75.0
         private const val MIN_SKEW_ANGLE = 0.5
         private const val MAX_SKEW_ANGLE = 45.0
         private const val HOUGH_THRESHOLD = 100
@@ -84,8 +82,8 @@ class ImagePreprocessor {
             }
         }
 
-        // Для OCR — полный pipeline с grayscale
-        return applyOcrFilters(processed, settings)
+        // Для OCR — только grayscale + инверсия, БЕЗ пользовательских настроек
+        return applyOcrFilters(processed)
     }
 
     /**
@@ -164,9 +162,7 @@ class ImagePreprocessor {
         contrast: Float,
         brightness: Float
     ): Bitmap {
-        val result = Bitmap.createBitmap(
-            source.width, source.height, Bitmap.Config.ARGB_8888
-        )
+        val result = createBitmap(source.width, source.height)
         val canvas = Canvas(result)
 
         // ColorMatrix формула:
@@ -213,9 +209,7 @@ class ImagePreprocessor {
             ))
             Imgproc.filter2D(mat, mat, -1, kernel)
 
-            val result = Bitmap.createBitmap(
-                mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888
-            )
+            val result = createBitmap(mat.cols(), mat.rows())
             Utils.matToBitmap(mat, result)
             result
         } catch (e: Exception) {
@@ -242,9 +236,7 @@ class ImagePreprocessor {
                 Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
             )
 
-            val result = Bitmap.createBitmap(
-                gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888
-            )
+            val result = createBitmap(gray.cols(), gray.rows())
             Utils.matToBitmap(gray, result)
             result
         } catch (e: Exception) {
@@ -263,71 +255,41 @@ class ImagePreprocessor {
     /**
      * Полный pipeline для OCR (grayscale + все оптимизации).
      */
-    private fun applyOcrFilters(baseBitmap: Bitmap, settings: ScanSettings): Bitmap {
+    private fun applyOcrFilters(baseBitmap: Bitmap): Bitmap {
+        if (!openCvInitialized) return baseBitmap
+
         val mat = Mat()
         val gray = Mat()
 
         try {
             Utils.bitmapToMat(baseBitmap, mat)
 
-            if (mat.channels() == 1) {
-                mat.copyTo(gray)
-            } else {
+            // Определяем нужна ли инверсия
+            if (mat.channels() > 1) {
                 Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
+            } else {
+                mat.copyTo(gray)
             }
 
-            // Инверсия тёмного фона (только для OCR)
-            val needsInversion = isDarkBackground(gray)
+            val mean = Core.mean(gray).`val`[0]
+            val needsInversion = mean < BRIGHTNESS_DARK_THRESHOLD
+
             if (needsInversion) {
-                Log.d(TAG, "OCR: Dark background → inverting")
-                Core.bitwise_not(gray, gray)
+                Log.d(TAG, "OCR: dark bg (mean=${"%.0f".format(mean)}), inverting")
+                Core.bitwise_not(mat, mat)  // Инвертируем ЦВЕТНОЙ mat
             }
 
-            // Денойзинг
-            if (settings.denoiseEnabled) {
-                val temp = Mat()
-                try {
-                    Imgproc.bilateralFilter(
-                        gray, temp,
-                        BILATERAL_DIAMETER,
-                        BILATERAL_SIGMA,
-                        BILATERAL_SIGMA
-                    )
-                    temp.copyTo(gray)
-                } finally {
-                    temp.release()
-                }
-            }
+            // Возвращаем ЦВЕТНОЙ bitmap — Tesseract сам сделает grayscale
+            val result = createBitmap(mat.cols(), mat.rows())
+            Utils.matToBitmap(mat, result)
 
-            // Контраст + Яркость
-            val contrast = settings.contrastLevel ?: 1.0f
-            val brightness = settings.brightnessLevel ?: 0f
-            if (contrast != 1.0f || brightness != 0f) {
-                gray.convertTo(gray, -1, contrast.toDouble(), brightness.toDouble())
-            }
+            Log.d(TAG, "OCR prep: ${baseBitmap.width}x${baseBitmap.height}, " +
+                    "inv=$needsInversion")
 
-            // Резкость
-            val sharpen = settings.sharpenLevel ?: 0f
-            if (sharpen > 0f) {
-                applyGraySharpen(gray, sharpen)
-            }
-
-            // Бинаризация
-            if (settings.binarizationEnabled) {
-                Imgproc.threshold(
-                    gray, gray, 0.0, 255.0,
-                    Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU
-                )
-            }
-
-            val result = Bitmap.createBitmap(
-                gray.cols(), gray.rows(), Bitmap.Config.ARGB_8888
-            )
-            Utils.matToBitmap(gray, result)
             return result
 
         } catch (e: Exception) {
-            Log.e(TAG, "OCR filter pipeline failed", e)
+            Log.e(TAG, "OCR filter failed", e)
             return baseBitmap
         } finally {
             gray.release()

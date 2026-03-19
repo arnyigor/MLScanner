@@ -39,7 +39,7 @@ class RecognizeTextUseCase(
 ) {
     companion object {
         private const val TAG = "RecognizeTextUseCase"
-        private const val DEFAULT_TIMEOUT_MS = 30_000L // 30 секунд
+        private const val DEFAULT_TIMEOUT_MS = 60_000L // 60 секунд
     }
 
     /**

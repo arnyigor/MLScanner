@@ -81,17 +81,15 @@ class OcrRepositoryImpl(
             initialize()
         }
 
-        // Предобработка
         val processed = imagePreprocessor.prepareBaseImage(bitmap, settings)
 
-        return try {
-            // Используем Hybrid по умолчанию
-            hybridEngine.recognize(processed, settings.handwrittenMode)
-        } finally {
-            if (processed !== bitmap) {
-                processed.recycle()
-            }
+        val result = hybridEngine.recognize(processed, settings.handwrittenMode)
+
+        if (processed !== bitmap && !processed.isRecycled) {
+            processed.recycle()
         }
+
+        return result
     }
 
     /**
