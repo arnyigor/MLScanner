@@ -1,14 +1,16 @@
 package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
-import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,12 +23,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material3.Card
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -34,9 +36,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -57,85 +57,76 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun PreprocessingScreenPreview() {
     PreprocessingScreen(
-        previewBitmap = null, //createBitmap(200, 200).apply { eraseColor(Color.LTGRAY) },
-        onStartScan = { _, _ -> /* ничего не делаем */ },
-        onUpdateSettings = { /* ничего не делаем */ },
-        onBack = { /* ничего не делаем */ }
+        previewBitmap = null,
+        onStartScan = { _, _ -> },
+        onUpdateSettings = { },
+        onBack = { }
     )
 }
 
+// Переименовали в Route, чтобы устранить конфликт сигнатур
 @Composable
-fun PreprocessingScreen(
+fun PreprocessingRoute(
     viewModel: ScanViewModel = koinViewModel(),
     navController: NavHostController
 ) {
-    val previewBitmap by viewModel.previewImage.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val previewBitmap = uiState.previewBitmap
 
-    // Логируем состояние при каждой рекомпозиции
-    LaunchedEffect(previewBitmap) {
-        if (previewBitmap == null) {
-            Log.e("PreprocessingScreen", "Preview Bitmap is NULL")
-        } else {
-            Log.d("PreprocessingScreen", "Drawing Bitmap: ${previewBitmap!!.width}x${previewBitmap!!.height}")
-        }
-    }
-    // Если previewBitmap null, попробуем взять оригинал напрямую (failsafe)
-    val displayBitmap = previewBitmap ?: viewModel.capturedBitmap
-
-    if (displayBitmap != null) {
+    if (previewBitmap != null) {
         PreprocessingScreen(
-            previewBitmap = displayBitmap,
-            onUpdateSettings = viewModel::updateSettings,
-            onStartScan = { settings, cropRect ->
-                viewModel.applyCropAndScan(cropRect, settings)
+            previewBitmap = previewBitmap,
+            settings = uiState.settings,
+            isApplyingFilters = uiState.isApplyingFilters,
+            onUpdateSettings = viewModel::onSettingsChanged,
+            onCropChanged = viewModel::onCropChanged,
+            onStartScan = { _, cropRect ->
+                if (cropRect != null) {
+                    viewModel.onCropChanged(cropRect)
+                }
+                viewModel.onStartScanning()
                 navController.navigate(Screen.Scanning.route)
             },
             onBack = { navController.popBackStack() }
         )
     } else {
-        // Показываем лоадер или ошибку, если совсем ничего нет
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-            Text("Processing image...", modifier = Modifier.padding(top = 64.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Text("Processing image...", modifier = Modifier.padding(top = 16.dp))
+            }
         }
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreprocessingScreen(
     previewBitmap: Bitmap?,
-    onUpdateSettings: (ScanSettings) -> Unit,
-    onStartScan: (ScanSettings, CropRect?) -> Unit,
-    onBack: () -> Unit
+    settings: ScanSettings = ScanSettings.DEFAULT,
+    isApplyingFilters: Boolean = false,
+    onUpdateSettings: (ScanSettings) -> Unit = {},
+    onCropChanged: (CropRect) -> Unit = {},
+    onStartScan: (ScanSettings, CropRect?) -> Unit = { _, _ -> },
+    onBack: () -> Unit = {}
 ) {
-    var contrastLevel by remember { mutableFloatStateOf(1.0f) }
-    var brightnessLevel by remember { mutableFloatStateOf(0f) }
-    var sharpenLevel by remember { mutableFloatStateOf(0f) }
-    var denoiseEnabled by remember { mutableStateOf(false) }
-    var binarizationEnabled by remember { mutableStateOf(false) }
-    var autoRotateEnabled by remember { mutableStateOf(true) }
+    var contrastLevel by remember(settings) { mutableFloatStateOf(settings.contrastLevel) }
+    var brightnessLevel by remember(settings) { mutableFloatStateOf(settings.brightnessLevel) }
+    var sharpenLevel by remember(settings) { mutableFloatStateOf(settings.sharpenLevel) }
+    var denoiseEnabled by remember(settings) { mutableStateOf(settings.denoiseEnabled) }
+    var binarizationEnabled by remember(settings) { mutableStateOf(settings.binarizationEnabled) }
+    var autoRotateEnabled by remember(settings) { mutableStateOf(settings.autoRotateEnabled) }
     var cropRect by remember { mutableStateOf<CropRect?>(null) }
 
-    val settings = ScanSettings(
-        contrastLevel = contrastLevel,
-        brightnessLevel = brightnessLevel,
-        sharpenLevel = sharpenLevel,
-        denoiseEnabled = denoiseEnabled,
-        autoRotateEnabled = autoRotateEnabled,
-        binarizationEnabled = binarizationEnabled
-    )
-
-    LaunchedEffect(contrastLevel, brightnessLevel, sharpenLevel) {
+    fun emitSettings() {
         onUpdateSettings(
             ScanSettings(
                 contrastLevel = contrastLevel,
                 brightnessLevel = brightnessLevel,
                 sharpenLevel = sharpenLevel,
-                denoiseEnabled = true,
-                autoRotateEnabled = true,
-                binarizationEnabled = false
+                denoiseEnabled = denoiseEnabled,
+                autoRotateEnabled = autoRotateEnabled,
+                binarizationEnabled = binarizationEnabled
             )
         )
     }
@@ -143,14 +134,27 @@ fun PreprocessingScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Preprocessing Settings") },
+                title = { Text("Image Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        contrastLevel = 1.0f
+                        brightnessLevel = 0f
+                        sharpenLevel = 0f
+                        denoiseEnabled = false
+                        binarizationEnabled = false
+                        autoRotateEnabled = true
+                        emitSettings()
+                    }) {
+                        Icon(Icons.Default.Refresh, "Reset")
+                    }
                 }
             )
-        },
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -158,51 +162,81 @@ fun PreprocessingScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Image Preview
-            Card(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(250.dp)
+                    .aspectRatio(4f / 3f)
                     .padding(16.dp)
             ) {
-                if (previewBitmap != null) {
-                    /* ---------- Normal preview --------------------------------- */
-                    CropImageView(
-                        bitmap = previewBitmap.asImageBitmap(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(250.dp)          // keep same size as before
-                            .padding(16.dp),
-                        onCropChanged = { cropRect = it }
-                    )
+                if (previewBitmap != null && !previewBitmap.isRecycled) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        CropImageView(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            modifier = Modifier.fillMaxSize(),
+                            onCropChanged = {
+                                cropRect = it
+                                onCropChanged(it)
+                            }
+                        )
+
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isApplyingFilters,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                            modifier = Modifier.align(Alignment.TopEnd)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.padding(8.dp).size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        }
+                    }
                 } else {
-                    /* ---------- Error fallback -------------------------------- */
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Error,
-                            contentDescription = "Error preview",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(64.dp)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "No image available",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
             }
 
             FilledTonalButton(
                 onClick = {
-                    onStartScan(settings, cropRect)
+                    val currentSettings = ScanSettings(
+                        contrastLevel = contrastLevel,
+                        brightnessLevel = brightnessLevel,
+                        sharpenLevel = sharpenLevel,
+                        denoiseEnabled = denoiseEnabled,
+                        autoRotateEnabled = autoRotateEnabled,
+                        binarizationEnabled = binarizationEnabled
+                    )
+                    onStartScan(currentSettings, cropRect)
                 },
+                enabled = previewBitmap != null && !isApplyingFilters,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Icon(Icons.Default.DocumentScanner, "Scan", modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    Icons.Default.DocumentScanner, "Scan",
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
                 Text("Start Scanning")
             }
 
@@ -212,29 +246,29 @@ fun PreprocessingScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Contrast Slider
             SliderControl(
                 label = "Contrast",
                 value = contrastLevel,
                 onValueChange = { contrastLevel = it },
+                onValueChangeFinished = { emitSettings() },
                 valueRange = 0.5f..2.0f,
                 valueDisplay = "${(contrastLevel * 100).toInt()}%"
             )
 
-            // Brightness Slider
             SliderControl(
                 label = "Brightness",
                 value = brightnessLevel,
                 onValueChange = { brightnessLevel = it },
+                onValueChangeFinished = { emitSettings() },
                 valueRange = -100f..100f,
                 valueDisplay = brightnessLevel.toInt().toString()
             )
 
-            // Sharpen Slider
             SliderControl(
                 label = "Sharpness",
                 value = sharpenLevel,
                 onValueChange = { sharpenLevel = it },
+                onValueChangeFinished = { emitSettings() },
                 valueRange = 0f..2.0f,
                 valueDisplay = "${(sharpenLevel * 100).toInt()}%"
             )
@@ -247,29 +281,37 @@ fun PreprocessingScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Toggle switches
             SwitchControl(
                 label = "Noise Reduction",
                 description = "Remove image noise for better accuracy",
                 checked = denoiseEnabled,
-                onCheckedChange = { denoiseEnabled = it }
+                onCheckedChange = {
+                    denoiseEnabled = it
+                    emitSettings()
+                }
             )
 
             SwitchControl(
                 label = "Binarization",
-                description = "Convert to black & white for better text detection",
+                description = "Convert to black & white for documents",
                 checked = binarizationEnabled,
-                onCheckedChange = { binarizationEnabled = it }
+                onCheckedChange = {
+                    binarizationEnabled = it
+                    emitSettings()
+                }
             )
 
             SwitchControl(
                 label = "Auto-Rotate",
-                description = "Automatically correct image orientation",
+                description = "Automatically correct orientation",
                 checked = autoRotateEnabled,
-                onCheckedChange = { autoRotateEnabled = it }
+                onCheckedChange = {
+                    autoRotateEnabled = it
+                    emitSettings()
+                }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.height(80.dp))
         }
     }
 }
@@ -279,6 +321,7 @@ fun SliderControl(
     label: String,
     value: Float,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null,
     valueRange: ClosedFloatingPointRange<Float>,
     valueDisplay: String
 ) {
@@ -297,6 +340,7 @@ fun SliderControl(
         Slider(
             value = value,
             onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
             valueRange = valueRange
         )
     }

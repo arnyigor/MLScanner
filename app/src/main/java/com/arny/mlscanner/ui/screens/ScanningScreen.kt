@@ -1,5 +1,6 @@
 package com.arny.mlscanner.ui.screens
 
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -9,49 +10,64 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DocumentScanner
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import org.koin.androidx.compose.koinViewModel
 
-// ---------------------------------------------------------------------------
-// 1️⃣  Full‑screen preview of the scanning flow
-// ---------------------------------------------------------------------------
-@Preview(
-    name = "ScanningScreen – Default",
-    showBackground = true,
-    widthDp = 360, heightDp = 640
-)
+@Preview(name = "ScanningScreen – Default", widthDp = 360, heightDp = 640)
 @Composable
 fun PreviewScanningScreen() {
     MaterialTheme {
-        ScanningScreen()
+        ScanningContent(
+            progress = 0.5f,
+            message = "Processing...",
+            onCancel = { }
+        )
     }
 }
 
 @Composable
 fun ScanningScreen(
-    progressMessage: String = "Scanning text...",
+    viewModel: ScanViewModel = koinViewModel(),
     onCancel: () -> Unit = {}
 ) {
-    // Animated rotation for scanner icon
-    val infiniteTransition = rememberInfiniteTransition(label = "scanner")
+    val uiState by viewModel.uiState.collectAsState()
+
+    ScanningContent(
+        progress = uiState.processingProgress,
+        message = uiState.processingMessage,
+        onCancel = {
+            viewModel.onCancelScanning()
+            onCancel()
+        }
+    )
+}
+
+@Composable
+fun ScanningContent(
+    progress: Float,
+    message: String,
+    onCancel: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "scan")
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
@@ -68,9 +84,9 @@ fun ScanningScreen(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.padding(32.dp)
         ) {
-            // Animated scanner icon
             Icon(
                 imageVector = Icons.Default.DocumentScanner,
                 contentDescription = null,
@@ -80,69 +96,28 @@ fun ScanningScreen(
                 tint = MaterialTheme.colorScheme.primary
             )
 
-            // Progress indicator
-            CircularProgressIndicator(
-                modifier = Modifier.size(48.dp)
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth(),
             )
 
-            // Status text
             Text(
-                text = progressMessage,
-                style = MaterialTheme.typography.titleMedium
+                text = "${(progress * 100).toInt()}%",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.primary
             )
 
-            // Steps info
-            Column(
-                horizontalAlignment = Alignment.Start,
-                modifier = Modifier.padding(horizontal = 32.dp)
-            ) {
-                ScanningStep("Preprocessing image", true)
-                ScanningStep("Detecting text blocks", true)
-                ScanningStep("Recognizing characters", true)
-                ScanningStep("Preserving formatting", false)
-            }
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.height(32.dp))
 
-            // Cancel button (optional)
             TextButton(onClick = onCancel) {
                 Text("Cancel")
             }
         }
-    }
-}
-
-@Composable
-fun ScanningStep(
-    text: String,
-    isCompleted: Boolean
-) {
-    Row(
-        modifier = Modifier.padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        if (isCompleted) {
-            Icon(
-                imageVector = Icons.Default.DocumentScanner,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
-        } else {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp
-            )
-        }
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (isCompleted) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
-        )
     }
 }

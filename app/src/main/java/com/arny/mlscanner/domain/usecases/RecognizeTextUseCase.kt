@@ -1,95 +1,101 @@
-// java\com\arny\mlscanner\domain\usecases\RecognizeTextUseCase.kt
-
+// ============================================================
+// domain/usecases/RecognizeTextUseCase.kt
+// Единый UseCase для распознавания текста
+// ============================================================
 package com.arny.mlscanner.domain.usecases
 
 import android.graphics.Bitmap
-import com.arny.mlscanner.data.ocr.TesseractEngine
-import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
-import com.arny.mlscanner.domain.models.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.util.Locale
+import android.util.Log
+import com.arny.mlscanner.domain.mappers.OcrResultMapper
+import com.arny.mlscanner.domain.models.OcrResult
+import com.arny.mlscanner.domain.models.RecognizedText
+import com.arny.mlscanner.domain.models.ScanSettings
+import com.arny.mlscanner.domain.models.errors.OcrError
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeout
 
+/**
+ * Единый UseCase для распознавания текста.
+ *
+ * Ответственность:
+ * 1. Оркестрация процесса (preprocessing → recognition → mapping)
+ * 2. Обработка ошибок и таймаутов
+ * 3. Маппинг результата в UI-модель
+ *
+ * НЕ ответственен за:
+ * - Инициализацию движков (это делает Application/DI)
+  * - Управление lifecycle движков
+  * - Выбор движка (это делает OcrRepository)
+  * - Предобработку изображений (это делает ImagePreprocessor)
+  *
+ * @property ocrRepository Репозиторий для доступа к OCR-движкам
+ * @property resultMapper Маппер результатов
+ * @property timeoutMs Таймаут обработки в миллисекундах
+ */
 class RecognizeTextUseCase(
-    private val preprocessor: ImagePreprocessor,
-    private val tesseractEngine: TesseractEngine // ИНЖЕКТИРУЕМ
+    private val ocrRepository: OcrRepository,
+    private val resultMapper: OcrResultMapper = OcrResultMapper(),
+    private val timeoutMs: Long = DEFAULT_TIMEOUT_MS
 ) {
-    // Tesseract должен быть инициализирован один раз
-    init {
-        tesseractEngine.init()
+    companion object {
+        private const val TAG = "RecognizeTextUseCase"
+        private const val DEFAULT_TIMEOUT_MS = 30_000L // 30 секунд
     }
 
+    /**
+     * Выполнение распознавания текста.
+     *
+     * @param bitmap Изображение для распознавания
+     *               (уже обрезанное и масштабированное)
+     * @param settings Настройки сканирования
+     * @return Result<RecognizedText> — успех или типизированная ошибка
+     *
+     * @throws CancellationException если корутина отменена
+     *         (НЕ ловится — позволяет structured concurrency работать)
+     */
     suspend fun execute(
         bitmap: Bitmap,
         settings: ScanSettings
-    ): Result<RecognizedText> = withContext(Dispatchers.Default) {
-        try {
-            // 1. Предобработка изображения
-            val preprocessedBitmap = preprocessor.prepareBaseImage(bitmap, settings)
+    ): Result<RecognizedText> {
+        Log.d(TAG, "Starting OCR: ${bitmap.width}x${bitmap.height}, " +
+            "settings=$settings")
 
-            // 2. Распознавание текста с помощью Tesseract
-            val ocrResult = tesseractEngine.recognize(preprocessedBitmap)
+        return try {
+            // Таймаут защищает от зависания Tesseract
+            val ocrResult = withTimeout(timeoutMs) {
+                ocrRepository.recognize(bitmap, settings)
+            }
 
-            // 3. Пост-обработка и маппинг в доменную модель
-            val recognizedText = mapTesseractResultToDomainModel(ocrResult)
+            Log.d(TAG, "OCR completed: ${ocrResult.summary()}")
 
-            Result.success(recognizedText)
-        } catch (e: Exception) {
+            if (ocrResult.isEmpty) {
+                Result.failure(OcrError.NoTextFound)
+            } else {
+                val recognized = resultMapper.toRecognizedText(ocrResult)
+                Result.success(recognized)
+            }
+
+        } catch (e: CancellationException) {
+            // НЕ ловим — позволяем корутине отмениться корректно
+            throw e
+
+        } catch (e: OcrError) {
+            Log.e(TAG, "OCR error: ${e.displayMessage}", e)
             Result.failure(e)
-        }
-    }
 
-    private fun mapTesseractResultToDomainModel(ocrResult: OcrResult): RecognizedText {
-        val boxes = ocrResult.textBoxes
-        if (boxes.isEmpty()) {
-            return RecognizedText("", "", emptyList(), 0f, "unknown")
-        }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Log.e(TAG, "OCR timeout after ${timeoutMs}ms", e)
+            Result.failure(OcrError.Timeout(timeoutMs))
 
-        // 1. Собираем полный текст, чтобы найти URL-адреса
-        val allTextRaw = boxes.joinToString(" ") { it.text }
-
-        // 2. ПОСТ-ОБРАБОТКА URL (ФИКС СЛИПАНИЯ)
-        // Regex для URL (должен быть достаточно широким)
-        val urlRegex = Regex("https?://[a-zA-Z0-9./-]+", RegexOption.IGNORE_CASE)
-
-        // Удаляем все пробелы, которые Tesseract мог добавить в URL
-        val finalFormattedText = urlRegex.replace(allTextRaw) { match ->
-            match.value.replace(" ", "")
-        }
-
-        // 3. Считаем среднюю уверенность
-        val avgConf = boxes.map { it.confidence }.average().toFloat()
-
-        // 4. Маппинг в блоки (для UI)
-        val lineInfos = boxes.map { box ->
-            LineInfo(
-                text = box.text,
-                boundingBox = box.boundingBox.toRect(),
-                indentLevel = 0,
-                confidence = box.confidence
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected OCR error", e)
+            Result.failure(
+                OcrError.Unknown(
+                    reason = e.message ?: "Unknown error",
+                    cause = e
+                )
             )
         }
-
-        val blocks = listOf(
-            TextBlockInfo(
-                text = finalFormattedText,
-                boundingBox = lineInfos.first().boundingBox, // Берем первый BBox для всего блока
-                lines = lineInfos
-            )
-        )
-
-        // Простая эвристика для языка (чтобы UI показывал ENG/RUS)
-        val detectedLang = if (allTextRaw.count { it in 'a'..'z' || it in 'A'..'Z' } > allTextRaw.count { it in 'А'..'Я' || it in 'а'..'я' }) "eng" else "rus"
-
-        return RecognizedText(
-            originalText = allTextRaw,
-            formattedText = finalFormattedText,
-            blocks = blocks,
-            confidence = avgConf,
-            detectedLanguage = detectedLang.uppercase(Locale.ROOT)
-        )
     }
-
-    fun preprocessImage(source: Bitmap, scanSettings: ScanSettings): Bitmap =
-        preprocessor.prepareBaseImage(source, scanSettings)
 }
+

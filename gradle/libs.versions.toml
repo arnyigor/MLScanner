@@ -45,6 +45,7 @@ mockitoKotlin = "5.2.1"
 archCoreTesting = "2.2.0"
 
 [libraries]
+# ML Kit Text Recognition V2 (offline)
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraxVersion" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "cameraxVersion" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "cameraxVersion" }

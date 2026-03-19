@@ -1,13 +1,16 @@
 package com.arny.mlscanner.di
 
-import com.arny.mlscanner.domain.usecases.AdvancedRecognizeTextUseCase
-import org.koin.dsl.module
+import com.arny.mlscanner.domain.formatters.TextFormatter
+import com.arny.mlscanner.domain.mappers.OcrResultMapper
+import com.arny.mlscanner.domain.usecases.OcrRepository
 import com.arny.mlscanner.domain.usecases.RecognizeTextUseCase
+import org.koin.dsl.module
 
 val domainModule = module {
-    // Koin сам найдет зависимости для конструктора Interactor'а
-    // factory - создаем каждый раз новый (безопаснее для stateful интеракторов)
-    // single - один на все приложение
-    factory { RecognizeTextUseCase(get(), get()) }
-    factory { AdvancedRecognizeTextUseCase(get(), get()) }
+    // Форматтеры и мапперы
+    factory { TextFormatter() }
+    factory { OcrResultMapper(get()) }
+
+    // UseCases
+    factory { RecognizeTextUseCase(get(), get()) } // OcrRepository, OcrResultMapper
 }

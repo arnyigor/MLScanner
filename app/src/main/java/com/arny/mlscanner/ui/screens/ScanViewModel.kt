@@ -2,246 +2,346 @@ package com.arny.mlscanner.ui.screens
 
 import android.graphics.Bitmap
 import android.util.Log
-import androidx.core.graphics.scale
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
-import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.usecases.RecognizeTextUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
     private val imagePreprocessor: ImagePreprocessor
 ) : ViewModel() {
 
-
-    private companion object {
-        // Оптимальные размеры для Tesseract
-        const val OPTIMAL_MIN_DIMENSION = 2000  // Минимум для хорошего OCR
-        const val OPTIMAL_MAX_DIMENSION = 3000  // Максимум для стабильности
-        const val PREVIEW_MAX_DIMENSION = 1280  // Для UI-превью
-        const val MAX_MEMORY_USAGE_MB = 150  // Лимит памяти для одного скана
+    companion object {
+        private const val TAG = "ScanViewModel"
+        private const val PREVIEW_MAX_DIMENSION = 1280
+        private const val OCR_MIN_DIMENSION = 2000
+        private const val OCR_MAX_DIMENSION = 3000
+        private const val FILTER_DEBOUNCE_MS = 150L
     }
 
-    // --- State ---
+    private val _uiState = MutableStateFlow(ScanUiState())
+    val uiState: StateFlow<ScanUiState> = _uiState.asStateFlow()
 
-    // Исправление: Делаем поле публичным для чтения, чтобы PreprocessingScreen видел его
-    var capturedBitmap: Bitmap? = null
-        private set
+    private val _events = Channel<ScanUiEvent>(Channel.BUFFERED)
+    val events: Flow<ScanUiEvent> = _events.receiveAsFlow()
 
-    // Кэш уменьшенной копии (для быстрого UI)
-    private var cachedGeometryBitmap: Bitmap? = null
+    private var originalBitmap: Bitmap? = null
+    private var previewSourceBitmap: Bitmap? = null
 
-    var scanSettings: ScanSettings = ScanSettings(
-        denoiseEnabled = false,
-        binarizationEnabled = false,
-        contrastLevel = 1.0f,
-        brightnessLevel = 0f,
-        sharpenLevel = 0f
-    )
-        private set
-
-    private val _previewImage = MutableStateFlow<Bitmap?>(null)
-    val previewImage: StateFlow<Bitmap?> = _previewImage.asStateFlow()
-
-    private val _recognizedText = MutableStateFlow<RecognizedText?>(null)
-    val recognizedText: StateFlow<RecognizedText?> = _recognizedText.asStateFlow()
-
-    private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
-
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
-
-    // Job для отмены устаревших фильтраций
     private var filterJob: Job? = null
+    private var scanJob: Job? = null
+    private val scanMutex = Mutex()
 
-    fun setCapturedImage(bitmap: Bitmap) {
-        capturedBitmap = bitmap // Сохраняем оригинал
+    // Public API
 
-        // Создаем thumbnail для UI (макс 1280px), чтобы фильтры не лагали
-        val scaled = scaleBitmapDown(bitmap, 1280)
+    fun onImageCaptured(bitmap: Bitmap) {
+        Log.d(TAG, "Image captured: ${bitmap.width}x${bitmap.height}")
+        originalBitmap = bitmap
+        val preview = scaleBitmapSafe(bitmap, PREVIEW_MAX_DIMENSION)
+        previewSourceBitmap = preview
 
-        cachedGeometryBitmap = scaled
-        // Сразу показываем картинку (без фильтров пока)
-        _previewImage.value = scaled
-
-        // Применяем дефолтные настройки
-        applyFiltersToPreview()
-    }
-
-    fun updateSettings(settings: ScanSettings) {
-        scanSettings = settings
-        applyFiltersToPreview()
-    }
-
-    private fun applyFiltersToPreview() {
-        val source = cachedGeometryBitmap ?: return
-
-        // Отменяем предыдущую обработку, если пользователь быстро двигает слайдер
-        filterJob?.cancel()
-
-        filterJob = viewModelScope.launch(Dispatchers.Default) {
-            // Debounce: ждем 100мс, прежде чем начать тяжелую обработку
-            delay(100)
-
-            try {
-                // ВАЖНО: Вызываем метод только для фильтров, без геометрии
-                val filtered = imagePreprocessor.applyFiltersOnly(source, scanSettings)
-
-                if (isActive) {
-                    _previewImage.value = filtered
-                }
-            } catch (_: CancellationException) {
-                // Игнорируем отмену
-            }
+        _uiState.update {
+            it.copy(
+                step = ScanStep.PREPROCESSING,
+                previewBitmap = preview,
+                originalImageSize = ImageSize(bitmap.width, bitmap.height),
+                error = null,
+                recognizedText = null
+            )
         }
     }
 
-    fun applyCropAndScan(cropRect: CropRect?, settings: ScanSettings) {
-        viewModelScope.launch(Dispatchers.Default) {
-            val original = capturedBitmap ?: return@launch
-
-            // 1. Кропаем ОРИГИНАЛ (высокое разрешение)
-            val cropped = cropBitmap(original, cropRect) ?: original
-
-            // 2. Апскейл (если cropped маленький)
-            val upscaled = if (maxOf(cropped.width, cropped.height) < 2000) {
-                scaleBitmapUp(cropped, 2000)
-            } else cropped
-
-            // 2. Применяем фильтры к полному разрешению
-            val processedFull = imagePreprocessor.applyFiltersOnly(upscaled, settings)
-
-            // 3. Запускаем OCR
-            startScanningInternal(processedFull)
-        }
+    fun onSettingsChanged(settings: ScanSettings) {
+        _uiState.update { it.copy(settings = settings) }
+        applyFiltersDebounced(settings)
     }
 
-    fun startScanning() {
-        val bitmap = capturedBitmap ?: run {
-            _error.value = "Image not found"
+    fun onCropChanged(cropRect: CropRect) {
+        val previewBmp = previewSourceBitmap ?: return
+        val originalBmp = originalBitmap ?: return
+
+        val scaleX = originalBmp.width.toFloat() / previewBmp.width
+        val scaleY = originalBmp.height.toFloat() / previewBmp.height
+
+        val originalCrop = CropRect(
+            left = cropRect.left * scaleX,
+            top = cropRect.top * scaleY,
+            width = cropRect.width * scaleX,
+            height = cropRect.height * scaleY
+        )
+
+        _uiState.update { it.copy(cropRect = originalCrop) }
+    }
+
+    fun onStartScanning() {
+        val original = originalBitmap
+        if (original == null) {
+            _uiState.update { it.copy(error = ScanError.NoImage) }
             return
         }
-        startScanningInternal(bitmap)
-    }
 
-    private fun startScanningInternal(bitmap: Bitmap) {
-        viewModelScope.launch(Dispatchers.Default) {
-            if (_isScanning.value) return@launch
+        _uiState.update {
+            it.copy(
+                step = ScanStep.SCANNING,
+                isScanning = true,
+                error = null,
+                processingProgress = 0f,
+                processingMessage = "Preparing image..."
+            )
+        }
 
-            // 1. Умное масштабирование
-            val minDimension = 2000
-            val maxDimension = 3000
-            val maxSide = maxOf(bitmap.width, bitmap.height)
-
-            var processedBitmap = bitmap
-            var needsBinarization =
-                scanSettings.binarizationEnabled // Сохраняем пользовательскую настройку
-
-            // Если картинка мелкая -> апскейлим И принудительно включаем бинаризацию
-            if (maxSide < minDimension) {
-                Log.d("ScanViewModel", "Upscaling bitmap from $maxSide to $minDimension")
-                processedBitmap = scaleBitmapUp(bitmap, minDimension)
-                // Для размытых после апскейла картинок бинаризация обязательна,
-                // иначе Tesseract сходит с ума на градиентах
-                needsBinarization = true
-            } else if (maxSide > maxDimension) {
-                Log.d("ScanViewModel", "Downscaling bitmap from $maxSide to $maxDimension")
-                processedBitmap = scaleBitmapDown(bitmap, maxDimension)
-            }
-
-            // 2. Формируем настройки для этого прогона
-            // Если мы апскейлили, мы ОБЯЗАНЫ включить бинаризацию в препроцессоре,
-            // чтобы Tesseract получил четкое Ч/Б изображение, а не "мыло".
-            val actualSettings = if (needsBinarization && !scanSettings.binarizationEnabled) {
-                scanSettings.copy(binarizationEnabled = true)
-            } else {
-                scanSettings
-            }
-
-            _isScanning.value = true
-            _error.value = null
-
-            try {
-                // Tesseract получит уже подготовленную (увеличенную + бинаризованную) картинку
-                val result = recognizeTextUseCase.execute(processedBitmap, actualSettings)
-
-                if (result.isSuccess) {
-                    _recognizedText.value = result.getOrNull()
-                } else {
-                    _error.value = result.exceptionOrNull()?.message ?: "Unknown error"
-                }
-            } catch (e: Exception) {
-                _error.value = e.message
-            } finally {
-                _isScanning.value = false
-                // Если мы создавали новый битмап при скейле, его лучше бы освободить,
-                // но в Kotlin это сделает GC. Главное не ресайклить capturedBitmap.
+        scanJob?.cancel()
+        scanJob = viewModelScope.launch(Dispatchers.Default) {
+            scanMutex.withLock {
+                performScanning(original)
             }
         }
     }
 
-    private fun scaleBitmapUp(bitmap: Bitmap, targetMinSide: Int): Bitmap {
+    fun onCancelScanning() {
+        scanJob?.cancel()
+        _uiState.update {
+            it.copy(
+                step = ScanStep.PREPROCESSING,
+                isScanning = false,
+                processingProgress = 0f
+            )
+        }
+    }
+
+    fun onNewScan() {
+        clearBitmaps()
+        _uiState.value = ScanUiState()
+    }
+
+    fun onTextEdited(newText: String) {
+        _uiState.update { state ->
+            state.copy(
+                recognizedText = state.recognizedText?.copy(formattedText = newText)
+            )
+        }
+    }
+
+    fun onCopyText() {
+        viewModelScope.launch {
+            _events.send(ScanUiEvent.CopiedToClipboard)
+        }
+    }
+
+    fun onShareText() {
+        val text = _uiState.value.recognizedText?.formattedText ?: return
+        viewModelScope.launch {
+            _events.send(ScanUiEvent.ShareText(text))
+        }
+    }
+
+    fun onErrorDismissed() {
+        _uiState.update { it.copy(error = null) }
+    }
+
+    // Backward compatibility
+    fun setCapturedImage(bitmap: Bitmap) = onImageCaptured(bitmap)
+    
+    fun applyCropAndScan(cropRect: CropRect?, settings: ScanSettings) {
+        cropRect?.let { onCropChanged(it) }
+        onStartScanning()
+    }
+
+    val capturedBitmap: Bitmap? get() = originalBitmap
+    val previewImage: StateFlow<Bitmap?> get() = MutableStateFlow(previewSourceBitmap).also { /* preserve for backward compat */ }
+    val recognizedText: StateFlow<com.arny.mlscanner.domain.models.RecognizedText?> get() = MutableStateFlow(_uiState.value.recognizedText)
+    val isScanning: StateFlow<Boolean> get() = MutableStateFlow(_uiState.value.isScanning)
+    val error: StateFlow<String?> get() = MutableStateFlow(_uiState.value.error?.message)
+
+    fun updateSettings(settings: ScanSettings) = onSettingsChanged(settings)
+    fun startScanning() = onStartScanning()
+    fun clear() = onNewScan()
+
+    // Private
+
+    private fun applyFiltersDebounced(settings: ScanSettings) {
+        val source = previewSourceBitmap ?: return
+
+        filterJob?.cancel()
+        filterJob = viewModelScope.launch(Dispatchers.Default) {
+            delay(FILTER_DEBOUNCE_MS)
+            _uiState.update { it.copy(isApplyingFilters = true) }
+
+            try {
+                val filtered = imagePreprocessor.applyFiltersOnly(source, settings)
+                if (isActive) {
+                    _uiState.update {
+                        it.copy(previewBitmap = filtered, isApplyingFilters = false)
+                    }
+                }
+            } catch (_: CancellationException) {
+                // Normal - user is moving slider
+            } catch (e: Exception) {
+                Log.e(TAG, "Filter error", e)
+                _uiState.update { it.copy(isApplyingFilters = false) }
+            }
+        }
+    }
+
+    private suspend fun performScanning(originalBitmap: Bitmap) {
+        try {
+            val state = _uiState.value
+            val settings = state.settings
+
+            updateProgress(0.1f, "Cropping image...")
+            val cropped = applyCrop(originalBitmap, state.cropRect)
+
+            updateProgress(0.2f, "Optimizing resolution...")
+            val (scaled, needsForceBinarize) = scaleForOcr(cropped)
+
+            updateProgress(0.3f, "Applying filters...")
+            val actualSettings = if (needsForceBinarize && !settings.binarizationEnabled) {
+                settings.copy(binarizationEnabled = true)
+            } else {
+                settings
+            }
+            val processed = imagePreprocessor.applyFiltersOnly(scaled, actualSettings)
+
+            updateProgress(0.5f, "Recognizing text...")
+            val result = recognizeTextUseCase.execute(processed, actualSettings)
+
+            if (result.isSuccess) {
+                val recognized = result.getOrNull()
+                updateProgress(1.0f, "Done!")
+
+                _uiState.update {
+                    it.copy(
+                        step = ScanStep.RESULT,
+                        recognizedText = recognized,
+                        isScanning = false,
+                        processingProgress = 1f
+                    )
+                }
+            } else {
+                val errorMsg = result.exceptionOrNull()?.message ?: "Unknown error"
+                _uiState.update {
+                    it.copy(
+                        step = ScanStep.PREPROCESSING,
+                        isScanning = false,
+                        error = ScanError.OcrFailed(errorMsg)
+                    )
+                }
+            }
+
+            if (cropped !== originalBitmap) safeRecycle(cropped)
+            if (scaled !== cropped) safeRecycle(scaled)
+            if (processed !== scaled) safeRecycle(processed)
+
+        } catch (_: CancellationException) {
+            _uiState.update { it.copy(step = ScanStep.PREPROCESSING, isScanning = false) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Scanning error", e)
+            _uiState.update {
+                it.copy(
+                    step = ScanStep.PREPROCESSING,
+                    isScanning = false,
+                    error = ScanError.OcrFailed(e.message ?: "Unknown")
+                )
+            }
+        }
+    }
+
+    private fun applyCrop(source: Bitmap, crop: CropRect?): Bitmap {
+        if (crop == null) return source
+
+        val left = crop.left.toInt().coerceIn(0, source.width - 1)
+        val top = crop.top.toInt().coerceIn(0, source.height - 1)
+        val width = crop.width.toInt().coerceAtMost(source.width - left)
+        val height = crop.height.toInt().coerceAtMost(source.height - top)
+
+        if (width <= 10 || height <= 10) {
+            Log.w(TAG, "Crop too small ($width x $height), using full image")
+            return source
+        }
+
+        return Bitmap.createBitmap(source, left, top, width, height)
+    }
+
+    private fun scaleForOcr(bitmap: Bitmap): Pair<Bitmap, Boolean> {
+        val maxSide = maxOf(bitmap.width, bitmap.height)
+        var needsBinarize = false
+
+        val result = when {
+            maxSide < OCR_MIN_DIMENSION -> {
+                Log.d(TAG, "Upscaling: $maxSide → $OCR_MIN_DIMENSION")
+                needsBinarize = true
+                scaleBitmapSafe(bitmap, OCR_MIN_DIMENSION)
+            }
+            maxSide > OCR_MAX_DIMENSION -> {
+                Log.d(TAG, "Downscaling: $maxSide → $OCR_MAX_DIMENSION")
+                scaleBitmapSafe(bitmap, OCR_MAX_DIMENSION)
+            }
+            else -> bitmap
+        }
+
+        return Pair(result, needsBinarize)
+    }
+
+    private fun updateProgress(progress: Float, message: String) {
+        _uiState.update {
+            it.copy(processingProgress = progress, processingMessage = message)
+        }
+    }
+
+    private fun scaleBitmapSafe(bitmap: Bitmap, targetMaxSide: Int): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
-        val ratio = targetMinSide.toFloat() / maxOf(w, h)
+        val maxSide = maxOf(w, h)
 
-        val newW = (w * ratio).toInt()
-        val newH = (h * ratio).toInt()
+        if (maxSide == targetMaxSide) return bitmap
 
-        // 1. Создаем увеличенный битмап (он будет сглаженным/размытым)
-        val scaled = bitmap.scale(newW, newH)
+        val ratio = targetMaxSide.toFloat() / maxSide
+        val newW = (w * ratio).toInt().coerceAtLeast(1)
+        val newH = (h * ratio).toInt().coerceAtLeast(1)
 
-        // 2. КРИТИЧЕСКИ ВАЖНО: Копируем в чистый ARGB_8888.
-        // Tesseract часто падает на битмапах, полученных из createScaledBitmap напрямую,
-        // если система решила использовать Hardware config или другой stride.
-        return if (scaled.config != Bitmap.Config.ARGB_8888 || !scaled.isMutable) {
-            scaled.copy(Bitmap.Config.ARGB_8888, true)
+        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+
+        return if (scaled.config != Bitmap.Config.ARGB_8888) {
+            val copy = scaled.copy(Bitmap.Config.ARGB_8888, false)
+            if (scaled !== bitmap) scaled.recycle()
+            copy
         } else {
             scaled
         }
     }
 
-    fun clear() {
-        capturedBitmap = null
-        cachedGeometryBitmap = null
-        _previewImage.value = null
-        _recognizedText.value = null
-        _error.value = null
-        _isScanning.value = false
+    private fun safeRecycle(bitmap: Bitmap) {
+        if (!bitmap.isRecycled && bitmap !== originalBitmap && bitmap !== previewSourceBitmap) {
+            bitmap.recycle()
+        }
     }
 
-    private fun scaleBitmapDown(bitmap: Bitmap, maxDimension: Int): Bitmap {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w <= maxDimension && h <= maxDimension) return bitmap
-
-        val ratio = if (w > h) maxDimension.toFloat() / w else maxDimension.toFloat() / h
-        val newW = (w * ratio).toInt()
-        val newH = (h * ratio).toInt()
-        return Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+    private fun clearBitmaps() {
+        filterJob?.cancel()
+        scanJob?.cancel()
+        originalBitmap = null
+        previewSourceBitmap = null
     }
 
-    private fun cropBitmap(source: Bitmap, rect: CropRect?): Bitmap? {
-        if (rect == null) return source
-        // Защита от вылета за границы
-        val left = rect.left.toInt().coerceIn(0, source.width)
-        val top = rect.top.toInt().coerceIn(0, source.height)
-        val width = rect.width.toInt().coerceAtMost(source.width - left)
-        val height = rect.height.toInt().coerceAtMost(source.height - top)
-
-        if (width <= 0 || height <= 0) return null
-        return Bitmap.createBitmap(source, left, top, width, height)
+    override fun onCleared() {
+        super.onCleared()
+        clearBitmaps()
     }
 }

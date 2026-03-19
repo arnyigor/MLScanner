@@ -41,15 +41,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,16 +66,17 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
-
-private fun dummyBitmap(): Bitmap =
-    createBitmap(200, 200).apply { eraseColor(android.graphics.Color.LTGRAY) }
+import kotlin.coroutines.resumeWithException
 
 @androidx.compose.ui.tooling.preview.Preview
 @Composable
@@ -92,20 +97,24 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var hasCameraPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         )
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        hasCameraPermission = isGranted
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+        if (!granted) {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required")
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -114,34 +123,42 @@ fun CameraScreen(
         }
     }
 
-    // Gallery launcher
     val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            try {
-                val tempFile = saveUriToCacheFile(context, it)
-                val bitmap = rotateBitmapIfNeeded(
-                    BitmapFactory.decodeFile(tempFile.absolutePath),
-                    tempFile.absolutePath
-                )
-                onImageCaptured(bitmap)
-                tempFile.delete()
-            } catch (e: Exception) {
-                onError(e)
+            scope.launch {
+                try {
+                    val bitmap = loadBitmapFromUri(context, it)
+                    onImageCaptured(bitmap)
+                } catch (e: Exception) {
+                    onError(e)
+                    snackbarHostState.showSnackbar("Failed to load image: ${e.message}")
+                }
             }
         }
     }
 
-    // Camera state
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var flashEnabled by remember { mutableStateOf(false) }
     var isCapturing by remember { mutableStateOf(false) }
 
-    // ImageCapture use case reference
-    var imageCaptureUseCase by remember { mutableStateOf<ImageCapture?>(null) }
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            .build()
+    }
+
+    LaunchedEffect(flashEnabled) {
+        imageCapture.flashMode = if (flashEnabled) {
+            ImageCapture.FLASH_MODE_ON
+        } else {
+            ImageCapture.FLASH_MODE_OFF
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Scan Text") },
@@ -151,7 +168,7 @@ fun CameraScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black.copy(alpha = 0.5f),
+                    containerColor = Color.Black.copy(alpha = 0.6f),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -165,19 +182,14 @@ fun CameraScreen(
                 .padding(padding)
         ) {
             if (hasCameraPermission) {
-                // Camera Preview
-                CameraPreview(
+                CameraPreviewRefactored(
                     modifier = Modifier.fillMaxSize(),
                     lensFacing = lensFacing,
-                    flashEnabled = flashEnabled,
-                    onImageCaptureReady = { imageCapture ->
-                        imageCaptureUseCase = imageCapture
-                    },
-                    onError = onError,
-                    lifecycleOwner = lifecycleOwner
+                    imageCapture = imageCapture,
+                    lifecycleOwner = lifecycleOwner,
+                    onError = onError
                 )
 
-                // Flip camera button
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -197,14 +209,10 @@ fun CameraScreen(
                             contentColor = Color.White
                         )
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.FlipCameraAndroid,
-                            contentDescription = "Flip camera"
-                        )
+                        Icon(Icons.Default.FlipCameraAndroid, "Flip camera")
                     }
                 }
 
-                // Camera Controls Overlay
                 CameraControls(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -212,27 +220,25 @@ fun CameraScreen(
                     isCapturing = isCapturing,
                     flashEnabled = flashEnabled,
                     onCaptureClick = {
-                        imageCaptureUseCase?.let { imageCapture ->
+                        if (!isCapturing) {
                             isCapturing = true
-                            captureImage(
-                                imageCapture = imageCapture,
-                                context = context,
-                                onImageCaptured = { bitmap ->
-                                    isCapturing = false
+                            scope.launch {
+                                try {
+                                    val bitmap = captureImageSuspend(imageCapture, context)
                                     onImageCaptured(bitmap)
-                                },
-                                onError = { error ->
+                                } catch (e: Exception) {
+                                    onError(e)
+                                    snackbarHostState.showSnackbar("Capture failed: ${e.message}")
+                                } finally {
                                     isCapturing = false
-                                    onError(error)
                                 }
-                            )
+                            }
                         }
                     },
                     onFlashToggle = { flashEnabled = !flashEnabled },
                     onGalleryClick = { galleryLauncher.launch("image/*") }
                 )
             } else {
-                // Permission denied UI
                 PermissionDeniedContent(
                     modifier = Modifier.align(Alignment.Center),
                     onRequestPermission = {
@@ -245,56 +251,46 @@ fun CameraScreen(
 }
 
 @Composable
-fun CameraPreview(
+fun CameraPreviewRefactored(
     modifier: Modifier = Modifier,
     lensFacing: Int,
-    flashEnabled: Boolean,
-    onImageCaptureReady: (ImageCapture) -> Unit,
-    onError: (Exception) -> Unit,
-    lifecycleOwner: LifecycleOwner
+    imageCapture: ImageCapture,
+    lifecycleOwner: LifecycleOwner,
+    onError: (Exception) -> Unit
 ) {
     val context = LocalContext.current
-    val previewView = remember { PreviewView(context) }
 
-    LaunchedEffect(lensFacing, flashEnabled) {
-        val cameraProvider = suspendCancellableCoroutine<ProcessCameraProvider> { continuation ->
-            val listenableFuture = ProcessCameraProvider.getInstance(context)
-            listenableFuture.addListener({
-                continuation.resume(listenableFuture.get())
-            }, ContextCompat.getMainExecutor(context))
+    val previewView = remember {
+        PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
         }
+    }
 
+    LaunchedEffect(lensFacing) {
         try {
-            cameraProvider.unbindAll()
+            val provider = getCameraProvider(context)
+            provider.unbindAll()
 
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
 
-            val imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .setFlashMode(
-                    if (flashEnabled) ImageCapture.FLASH_MODE_ON
-                    else ImageCapture.FLASH_MODE_OFF
-                )
-                .build()
-
-            val cameraSelector = CameraSelector.Builder()
+            val selector = CameraSelector.Builder()
                 .requireLensFacing(lensFacing)
                 .build()
 
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                preview,
-                imageCapture
-            )
-
-            // ⭐ Передаем imageCapture наружу
-            onImageCaptureReady(imageCapture)
-
+            provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
         } catch (e: Exception) {
             onError(e)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                val provider = ProcessCameraProvider.getInstance(context).get()
+                provider.unbindAll()
+            } catch (_: Exception) { }
         }
     }
 
@@ -302,6 +298,109 @@ fun CameraPreview(
         factory = { previewView },
         modifier = modifier
     )
+}
+
+private suspend fun getCameraProvider(context: Context): ProcessCameraProvider =
+    suspendCancellableCoroutine { cont ->
+        val future = ProcessCameraProvider.getInstance(context)
+        future.addListener({
+            try {
+                cont.resume(future.get())
+            } catch (e: Exception) {
+                cont.resumeWithException(e)
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+private suspend fun captureImageSuspend(
+    imageCapture: ImageCapture,
+    context: Context
+): Bitmap = withContext(Dispatchers.IO) {
+    val outputFile = File(
+        context.cacheDir,
+        "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+    )
+
+    suspendCancellableCoroutine<Bitmap> { cont ->
+        val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+
+        imageCapture.takePicture(
+            outputOptions,
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    try {
+                        val options = BitmapFactory.Options().apply {
+                            inPreferredConfig = Bitmap.Config.ARGB_8888
+                        }
+                        val bitmap = BitmapFactory.decodeFile(outputFile.absolutePath, options)
+                            ?: throw Exception("Failed to decode captured image")
+
+                        val rotated = applyExifRotation(bitmap, outputFile.absolutePath)
+                        outputFile.delete()
+                        cont.resume(rotated)
+                    } catch (e: Exception) {
+                        outputFile.delete()
+                        cont.resumeWithException(e)
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    outputFile.delete()
+                    cont.resumeWithException(exception)
+                }
+            }
+        )
+
+        cont.invokeOnCancellation { outputFile.delete() }
+    }
+}
+
+private suspend fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap =
+    withContext(Dispatchers.IO) {
+        val tempFile = File(context.cacheDir, "gallery_${System.currentTimeMillis()}.jpg")
+
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: throw Exception("Cannot open URI: $uri")
+
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath, options)
+                ?: throw Exception("Cannot decode image")
+
+            applyExifRotation(bitmap, tempFile.absolutePath)
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+private fun applyExifRotation(bitmap: Bitmap, path: String): Bitmap {
+    val exif = ExifInterface(path)
+    val orientation = exif.getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_NORMAL
+    )
+
+    val degrees = when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+        else -> return bitmap
+    }
+
+    val matrix = Matrix().apply { postRotate(degrees) }
+    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+
+    if (rotated !== bitmap) {
+        bitmap.recycle()
+    }
+
+    return rotated
 }
 
 @Composable
@@ -320,7 +419,6 @@ fun CameraControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Gallery button
         IconButton(
             onClick = onGalleryClick,
             modifier = Modifier.size(56.dp)
@@ -333,7 +431,6 @@ fun CameraControls(
             )
         }
 
-        // Capture button
         FilledIconButton(
             onClick = onCaptureClick,
             modifier = Modifier.size(72.dp),
@@ -358,7 +455,6 @@ fun CameraControls(
             }
         }
 
-        // Flash toggle
         IconButton(
             onClick = onFlashToggle,
             modifier = Modifier.size(56.dp)
@@ -403,84 +499,4 @@ fun PermissionDeniedContent(
             Text("Grant Permission")
         }
     }
-}
-
-// Helper functions
-private fun captureImage(
-    imageCapture: ImageCapture,
-    context: Context,
-    onImageCaptured: (Bitmap) -> Unit,
-    onError: (Exception) -> Unit
-) {
-    val outputFile = File(
-        context.cacheDir,
-        "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
-    )
-
-    val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
-
-    imageCapture.takePicture(
-        outputOptions,
-        ContextCompat.getMainExecutor(context),
-        object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                try {
-                    // Гарантируем ARGB_8888 для совместимости с OpenCV
-                    val options = BitmapFactory.Options()
-                        .apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-                    val bitmap = BitmapFactory.decodeFile(outputFile.absolutePath, options)
-                    // Поворачиваем, если нужно, используя путь к файлу
-                    val rotatedBitmap = rotateBitmapIfNeeded(bitmap, outputFile.absolutePath)
-                    onImageCaptured(rotatedBitmap)
-                    outputFile.delete()
-                } catch (e: Exception) {
-                    onError(e)
-                }
-            }
-
-            override fun onError(exception: ImageCaptureException) {
-                onError(exception)
-            }
-        }
-    )
-}
-
-// Вспомогательная функция для сохранения URI во временный файл для последующей обработки EXIF
-private fun saveUriToCacheFile(context: Context, uri: Uri): File {
-    val tempFile = File(context.cacheDir, "gallery_temp_${System.currentTimeMillis()}.jpg")
-    context.contentResolver.openInputStream(uri)?.use { input ->
-        FileOutputStream(tempFile).use { output ->
-            input.copyTo(output)
-        }
-    } ?: throw Exception("Failed to create temporary file for URI: $uri")
-    return tempFile
-}
-
-// Универсальная функция для поворота Bitmap на основе EXIF-данных файла
-private fun rotateBitmapIfNeeded(bitmap: Bitmap, path: String): Bitmap {
-    val exif = ExifInterface(path)
-    val orientation = exif.getAttributeInt(
-        ExifInterface.TAG_ORIENTATION,
-        ExifInterface.ORIENTATION_NORMAL
-    )
-
-    val matrix = Matrix()
-    when (orientation) {
-        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-    }
-
-    // Если поворот не требуется, возвращаем исходный Bitmap
-    if (matrix.isIdentity) {
-        return bitmap
-    } else {
-        // Создаем новый Bitmap с примененным поворотом
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-    }
-}
-
-private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap {
-    val inputStream = context.contentResolver.openInputStream(uri)
-    return BitmapFactory.decodeStream(inputStream)
 }

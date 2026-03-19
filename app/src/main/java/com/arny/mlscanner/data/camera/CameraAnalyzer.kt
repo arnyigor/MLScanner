@@ -9,14 +9,13 @@ import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import com.arny.mlscanner.data.ocr.TesseractEngine
+import com.arny.mlscanner.data.ocr.engine.TesseractEngine
 import com.arny.mlscanner.domain.models.OcrResult
 import kotlinx.coroutines.cancel
 import java.util.concurrent.atomic.AtomicBoolean
@@ -36,7 +35,7 @@ class CameraAnalyzer(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val rotationMatrix = Matrix()
-    private val yuvToRgbConverter = YuvToRgbConverter(context)
+    private val yuvConverter = YuvConverter
 
     override fun analyze(imageProxy: ImageProxy) {
         if (isProcessing.getAndSet(true)) {
@@ -82,8 +81,8 @@ class CameraAnalyzer(
 
         return when (image.format) {
             ImageFormat.YUV_420_888 -> {
-                // Используем RenderScript или чистый Java для конвертации
-                yuvToRgbConverter.yuvToRgb(image, imageProxy.width, imageProxy.height)
+                // Используем новый YuvConverter (без RenderScript)
+                yuvConverter.yuvToRgb(image)
             }
             ImageFormat.JPEG -> {
                 val buffer = image.planes[0].buffer

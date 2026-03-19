@@ -134,48 +134,28 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
     /* ------------------------------------------------------------------ */
 
     /**
-     * Persist every field of the domain model.  Optional `Float?` fields
-     * are written only when non‑null; a missing key is interpreted as
-     * “no change” by the reader.
+     * Persist every field of the domain model.
      */
     fun saveScanSettings(settings: ScanSettings) {
-        put("detect_document", settings.detectDocument)
         put("denoise_enabled", settings.denoiseEnabled)
-
-        maybePutFloat("brightness_level", settings.brightnessLevel)
-        maybePutFloat("contrast_level", settings.contrastLevel)
-        maybePutFloat("sharpen_level", settings.sharpenLevel)
-
+        put("brightness_level", settings.brightnessLevel)
+        put("contrast_level", settings.contrastLevel)
+        put("sharpen_level", settings.sharpenLevel)
         put("binarization_enabled", settings.binarizationEnabled)
         put("auto_rotate_enabled", settings.autoRotateEnabled)
-
-        put("ocr_language", settings.ocrLanguage)
-        put("confidence_threshold", settings.confidenceThreshold)
     }
 
     /**
      * Reconstruct the domain model from persistent storage.
      */
     fun getScanSettings(): ScanSettings = ScanSettings(
-        detectDocument = get("detect_document", false),
         denoiseEnabled = get("denoise_enabled", false),
-
-        brightnessLevel = getOptionalFloat("brightness_level"),
-        contrastLevel   = getOptionalFloat("contrast_level"),
-        sharpenLevel    = getOptionalFloat("sharpen_level"),
-
+        brightnessLevel = get("brightness_level", 0f),
+        contrastLevel = get("contrast_level", 1f),
+        sharpenLevel = get("sharpen_level", 0f),
         binarizationEnabled = get("binarization_enabled", false),
-        autoRotateEnabled   = get("auto_rotate_enabled", false),
-
-        ocrLanguage       = get("ocr_language", "en"),
-        confidenceThreshold = get("confidence_threshold", 0f)
+        autoRotateEnabled = get("auto_rotate_enabled", true)
     )
-
-    /**
-     * Returns `null` when the key is absent; otherwise the stored float.
-     */
-    private fun getOptionalFloat(key: String): Float? =
-        if (prefs.contains(key)) prefs.getFloat(key, 0f) else null
 
     /* ------------------------------------------------------------------ */
     /*  License‑key helpers                                              */

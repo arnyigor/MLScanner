@@ -1,5 +1,6 @@
 package com.arny.mlscanner.ui.utils
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
@@ -40,6 +41,7 @@ fun Context.getColorFromAttr(@AttrRes attrRes: Int): Int {
  *
  * Uses the window token of the current activity that owns the context.
  */
+@SuppressLint("ServiceCast")
 fun Context.hideKeyboard() {
     val imm =
         getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager

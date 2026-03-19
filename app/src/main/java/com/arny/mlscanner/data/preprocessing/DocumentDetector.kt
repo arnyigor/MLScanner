@@ -12,55 +12,37 @@ import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import androidx.core.graphics.createBitmap
+import com.arny.mlscanner.domain.models.Quadrilateral
 
-/**
- * Детектор документов и коррекции перспективы
- * В соответствии с требованиями TECH.md:
- * - Детекция краев документа
- * - Выпрямление перспективы (Document De-Skew)
- * - Поддержка разных форматов документов
- */
-class DocumentDetectorBack {
+class DocumentDetector {
     companion object {
         private const val TAG = "DocumentDetector"
         
         init {
-            // Загружаем OpenCV нативные библиотеки
             if (!OpenCVLoader.initDebug()) {
                 Log.e(TAG, "OpenCV initialization failed")
             }
         }
     }
 
-    /**
-     * Детекция четырехугольника документа на изображении
-     */
     fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? {
         try {
-            // Конвертируем Bitmap в Mat для обработки OpenCV
             val mat = Mat()
             Utils.bitmapToMat(bitmap, mat)
             
-            // Создаем копию для обработки
             val processedMat = Mat()
             Imgproc.cvtColor(mat, processedMat, Imgproc.COLOR_RGBA2GRAY)
             
-            // Повышаем контрастность
-            processedMat.convertTo(processedMat, -1, 1.5, 30.0) // alpha (contrast), beta (brightness)
-            
-            // Применяем размытие для уменьшения шума
+            processedMat.convertTo(processedMat, -1, 1.5, 30.0) 
             Imgproc.GaussianBlur(processedMat, processedMat, Size(5.0, 5.0), 0.0)
             
-            // Применяем Canny edge detector
             val edges = Mat()
             Imgproc.Canny(processedMat, edges, 50.0, 150.0)
             
-            // Находим контуры
             val contours = ArrayList<MatOfPoint>()
             val hierarchy = Mat()
             Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
             
-            // Находим наибольший четырехугольный контур
             var largestContour: MatOfPoint? = null
             var maxArea = 0.0
             
@@ -69,7 +51,6 @@ class DocumentDetectorBack {
                 val approx = MatOfPoint2f()
                 Imgproc.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, 0.01 * peri, true)
                 
-                // Проверяем, является ли контур четырехугольником
                 if (approx.toArray().size == 4) {
                     val area = Imgproc.contourArea(contour)
                     if (area > maxArea) {
@@ -79,12 +60,15 @@ class DocumentDetectorBack {
                 }
             }
             
-            // Если найден подходящий контур, возвращаем его
             if (largestContour != null) {
                 val points = largestContour.toArray()
-                // Сортируем точки по углам (верх-лево, верх-право, низ-право, низ-лево)
                 val sortedPoints = sortPoints(points)
-                return Quadrilateral(sortedPoints)
+                return Quadrilateral(
+                    topLeft = android.graphics.PointF(sortedPoints[0].x.toFloat(), sortedPoints[0].y.toFloat()),
+                    topRight = android.graphics.PointF(sortedPoints[1].x.toFloat(), sortedPoints[1].y.toFloat()),
+                    bottomRight = android.graphics.PointF(sortedPoints[2].x.toFloat(), sortedPoints[2].y.toFloat()),
+                    bottomLeft = android.graphics.PointF(sortedPoints[3].x.toFloat(), sortedPoints[3].y.toFloat())
+                )
             }
             
             processedMat.release()
@@ -98,9 +82,6 @@ class DocumentDetectorBack {
         return null
     }
 
-    /**
-     * Коррекция перспективы документа
-     */
     fun correctPerspective(bitmap: Bitmap, quadrilateral: Quadrilateral?): Bitmap? {
         if (quadrilateral == null) return bitmap
         
@@ -108,31 +89,27 @@ class DocumentDetectorBack {
             val srcMat = Mat()
             Utils.bitmapToMat(bitmap, srcMat)
             
-            // Определяем размеры выходного изображения
-            val width = bitmap.width
-            val height = bitmap.height
+            val w: Double = bitmap.width.toDouble()
+            val h: Double = bitmap.height.toDouble()
             
-            // Создаем точки назначения (прямоугольник)
             val dstPoints = MatOfPoint2f(
-                Point(0.0, 0.0),           // верх-лево
-                Point(width.toDouble(), 0.0), // верх-право
-                Point(width.toDouble(), height.toDouble()), // низ-право
-                Point(0.0, height.toDouble())  // низ-лево
+                Point(0.0, 0.0),
+                Point(w, 0.0),
+                Point(w, h),
+                Point(0.0, h)
             )
             
-            // Создаем матрицу преобразования перспективы
-            val srcPoints = MatOfPoint2f(*quadrilateral.points.map { Point(it.x, it.y) }.toTypedArray())
+            val mappedPoints = quadrilateral.points.map { Point(it.x.toDouble(), it.y.toDouble()) }.toTypedArray()
+            val srcPoints = MatOfPoint2f(*mappedPoints)
+            
             val transformMatrix = Imgproc.getPerspectiveTransform(srcPoints, dstPoints)
             
-            // Применяем преобразование перспективы
             val dstMat = Mat()
-            Imgproc.warpPerspective(srcMat, dstMat, transformMatrix, Size(width.toDouble(), height.toDouble()))
+            Imgproc.warpPerspective(srcMat, dstMat, transformMatrix, Size(w, h))
             
-            // Конвертируем обратно в Bitmap
             val resultBitmap = createBitmap(dstMat.cols(), dstMat.rows())
             Utils.matToBitmap(dstMat, resultBitmap)
             
-            // Освобождаем ресурсы
             srcMat.release()
             dstMat.release()
             transformMatrix.release()
@@ -146,65 +123,46 @@ class DocumentDetectorBack {
         }
     }
 
-    /**
-     * Сортировка точек по углам (верх-лево, верх-право, низ-право, низ-лево)
-     */
     private fun sortPoints(points: Array<Point>): Array<Point> {
-        val sorted = points.sortedBy { it.x + it.y } // верх-лево будет первым
-        val p1 = sorted[0] // верх-лево
-        val p4 = sorted[3] // низ-право
+        val sorted = points.sortedBy { it.x + it.y } 
+        val p1 = sorted[0] 
+        val p4 = sorted[3] 
         
-        // Остальные две точки
         val remaining = sorted.subList(1, 3).sortedBy { it.x }
-        val p2 = remaining[0] // верх-право или низ-лево (в зависимости от x)
-        val p3 = remaining[1] // другая точка
+        val p2 = remaining[0] 
+        val p3 = remaining[1] 
         
-        // Правильная сортировка: верх-лево, верх-право, низ-право, низ-лево
         return arrayOf(p1, p2, p4, p3)
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Методы для тестирования                                           */
-    /* ------------------------------------------------------------------ */
-
-    /**
-     * Детекция всех возможных четырехугольников на изображении
-     */
     fun detectQuadrilaterals(bitmap: Bitmap): List<List<org.opencv.core.Point>> {
         val quadrilaterals = mutableListOf<List<org.opencv.core.Point>>()
         try {
-            // Конвертируем Bitmap в Mat для обработки OpenCV
             val mat = Mat()
             Utils.bitmapToMat(bitmap, mat)
             
-            // Создаем копию для обработки
             val processedMat = Mat()
             Imgproc.cvtColor(mat, processedMat, Imgproc.COLOR_RGBA2GRAY)
             
-            // Повышаем контрастность
-            processedMat.convertTo(processedMat, -1, 1.5, 30.0) // alpha (contrast), beta (brightness)
-            
-            // Применяем размытие для уменьшения шума
+            processedMat.convertTo(processedMat, -1, 1.5, 30.0) 
             Imgproc.GaussianBlur(processedMat, processedMat, Size(5.0, 5.0), 0.0)
             
-            // Применяем Canny edge detector
             val edges = Mat()
             Imgproc.Canny(processedMat, edges, 50.0, 150.0)
             
-            // Находим контуры
             val contours = ArrayList<MatOfPoint>()
             val hierarchy = Mat()
             Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
             
-            // Находим все четырехугольные контуры
             for (contour in contours) {
                 val peri = Imgproc.arcLength(MatOfPoint2f(*contour.toArray()), true)
                 val approx = MatOfPoint2f()
                 Imgproc.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, 0.01 * peri, true)
                 
-                // Проверяем, является ли контур четырехугольником
                 if (approx.toArray().size == 4) {
-                    quadrilaterals.add(approx.toList())
+                    val pointsArray = approx.toArray()
+                    val pointList = pointsArray.map { it as org.opencv.core.Point }
+                    quadrilaterals.add(pointList)
                 }
             }
             
@@ -219,73 +177,33 @@ class DocumentDetectorBack {
         return quadrilaterals
     }
 
-    /**
-     * Нахождение углов документа
-     */
     fun findDocumentCorners(bitmap: Bitmap): List<org.opencv.core.Point> {
         val quadrilateral = detectDocumentQuadrilateral(bitmap)
         return if (quadrilateral != null) {
-            quadrilateral.points.toList()
+            quadrilateral.points.map { Point(it.x.toDouble(), it.y.toDouble()) }
         } else {
             emptyList()
         }
     }
 
-    /**
-     * Получение границ документа
-     */
     fun getDocumentBoundary(bitmap: Bitmap): Rect {
         val quadrilateral = detectDocumentQuadrilateral(bitmap)
         return if (quadrilateral != null && quadrilateral.isValid) {
-            // Находим минимальные и максимальные координаты
             var minX = Float.MAX_VALUE
             var minY = Float.MAX_VALUE
             var maxX = Float.MIN_VALUE
             var maxY = Float.MIN_VALUE
             
             for (point in quadrilateral.points) {
-                minX = minOf(minX, point.x.toFloat())
-                minY = minOf(minY, point.y.toFloat())
-                maxX = maxOf(maxX, point.x.toFloat())
-                maxY = maxOf(maxY, point.y.toFloat())
+                minX = minOf(minX, point.x)
+                minY = minOf(minY, point.y)
+                maxX = maxOf(maxX, point.x)
+                maxY = maxOf(maxY, point.y)
             }
             
             Rect(minX.toInt(), minY.toInt(), maxX.toInt(), maxY.toInt())
         } else {
-            // Если не удалось найти документ, возвращаем границы всего изображения
             Rect(0, 0, bitmap.width, bitmap.height)
         }
-    }
-}
-
-/**
- * Класс для представления четырехугольника документа
- */
-data class QuadrilateralBack(
-    val points: Array<org.opencv.core.Point>,
-    val isValid: Boolean = points.size == 4
-) {
-    data class Point(val x: Float, val y: Float)
-    
-    fun getTopLeft() = if (points.isNotEmpty()) points[0] else Point(0f, 0f)
-    fun getTopRight() = if (points.size > 1) points[1] else Point(0f, 0f)
-    fun getBottomRight() = if (points.size > 2) points[2] else Point(0f, 0f)
-    fun getBottomLeft() = if (points.size > 3) points[3] else Point(0f, 0f)
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-
-        other as Quadrilateral
-
-        if (isValid != other.isValid) return false
-        if (!points.contentEquals(other.points)) return false
-
-        return true
-    }
-
-    override fun hashCode(): Int {
-        var result = isValid.hashCode()
-        result = 31 * result + points.contentHashCode()
-        return result
     }
 }

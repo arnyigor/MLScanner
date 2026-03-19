@@ -151,9 +151,12 @@ android {
         jvmTarget = "17"
     }
 
-    packagingOptions {
+    packaging {
         jniLibs {
             useLegacyPackaging = true
+        }
+        resources {
+            excludes += listOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/license.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/notice.txt", "META-INF/ASL2.0")
         }
     }
 }
@@ -165,9 +168,9 @@ room {
 }
 
 dependencies {
-    // ML Kit Text Recognition V2 (offline)
-    implementation(libs.text.recognition) // Latin + Cyrillic
-    implementation(libs.language.id) // Language detection
+// ML Kit Text Recognition V2 (offline)
+implementation(libs.text.recognition) // Latin + Cyrillic
+implementation(libs.language.id) // Language detection
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
     implementation(libs.onnxruntime)
     // CameraX
