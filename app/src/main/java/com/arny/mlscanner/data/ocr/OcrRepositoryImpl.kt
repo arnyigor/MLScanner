@@ -88,6 +88,7 @@ class OcrRepositoryImpl(
             OcrEngineType.ML_KIT -> mlkitEngine
             OcrEngineType.TESSERACT -> tesseractEngine
             OcrEngineType.HYBRID -> hybridEngine
+            OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")
         }
 
         Log.d(TAG, "Using engine: ${settings.engineType.name}")

@@ -67,7 +67,6 @@ fun PreprocessingScreenPreview() {
         previewBitmap = null,
         onStartScan = { _, _ -> },
         onUpdateSettings = { },
-        onScanModeChanged = { },
         onBack = { }
     )
 }
@@ -85,10 +84,8 @@ fun PreprocessingRoute(
         PreprocessingScreen(
             previewBitmap = previewBitmap,
             settings = uiState.settings,
-            scanMode = uiState.scanMode,
             isApplyingFilters = uiState.isApplyingFilters,
             onUpdateSettings = viewModel::onSettingsChanged,
-            onScanModeChanged = viewModel::onScanModeChanged,
             onCropChanged = viewModel::onCropChanged,
             onStartScan = { _, cropRect ->
                 if (cropRect != null) {
@@ -117,10 +114,8 @@ fun PreprocessingRoute(
 fun PreprocessingScreen(
     previewBitmap: Bitmap?,
     settings: ScanSettings = ScanSettings.DEFAULT,
-    scanMode: ScanMode = ScanMode.ML_KIT_TEXT,
     isApplyingFilters: Boolean = false,
     onUpdateSettings: (ScanSettings) -> Unit = {},
-    onScanModeChanged: (ScanMode) -> Unit = {},
     onCropChanged: (CropRect) -> Unit = {},
     onStartScan: (ScanSettings, CropRect?) -> Unit = { _, _ -> },
     onRotate: (Float) -> Unit = {},
@@ -269,22 +264,22 @@ fun PreprocessingScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                ScanMode.entries.forEachIndexed { index, mode ->
+                OcrEngineType.entries.forEachIndexed { index, engine ->
                     SegmentedButton(
-                        selected = scanMode == mode,
-                        onClick = { onScanModeChanged(mode) },
+                        selected = engineType == engine,
+                        onClick = {
+                            engineType = engine
+                            emitSettings()
+                        },
                         shape = SegmentedButtonDefaults.itemShape(
                             index = index,
-                            count = ScanMode.entries.size
+                            count = OcrEngineType.entries.size
                         )
                     ) {
                         Text(
-                            when (mode) {
-                                ScanMode.ML_KIT_TEXT -> "ML Kit"
-                                ScanMode.TESSERACT_TEXT -> "Tesseract"
-                                ScanMode.BARCODE -> "Barcode"
-                            },
-                            style = androidx.compose.material3.MaterialTheme.typography.labelSmall
+                            engine.displayName,
+                            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                            maxLines = 1
                         )
                     }
                 }
@@ -298,50 +293,20 @@ fun PreprocessingScreen(
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
                 Icon(
-                    when (scanMode) {
-                        ScanMode.BARCODE -> Icons.Default.QrCodeScanner
-                        else -> Icons.Default.DocumentScanner
-                    },
+                    if (engineType == OcrEngineType.BARCODE) Icons.Default.QrCodeScanner
+                    else Icons.Default.DocumentScanner,
                     "Scan",
                     Modifier.size(20.dp)
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    when (scanMode) {
-                        ScanMode.BARCODE -> "Scan Barcode"
-                        else -> "Start Scanning"
-                    }
+                    if (engineType == OcrEngineType.BARCODE) "Scan Barcode"
+                    else "Start Scanning"
                 )
             }
 
-            // Скрываем фильтры и движок в режиме Barcode
-            if (scanMode != ScanMode.BARCODE) {
-                // ═══ Выбор OCR движка ═══
-                Text(
-                    "OCR Engine",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OcrEngineType.entries.forEach { type ->
-                        FilterChip(
-                            selected = engineType == type,
-                            onClick = {
-                                engineType = type
-                                emitSettings()
-                            },
-                            label = { Text(type.displayName) }
-                        )
-                    }
-                }
-
-                // ═══ Настройки фильтров ═══
+            // Скрываем фильтры в режиме Barcode
+            if (engineType != OcrEngineType.BARCODE) {
                 Text(
                     "Image Enhancement",
                     style = MaterialTheme.typography.titleMedium,

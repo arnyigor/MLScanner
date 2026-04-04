@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.ScanSettings
+import com.arny.mlscanner.domain.models.OcrEngineType
 import com.arny.mlscanner.domain.usecases.RecognizeTextUseCase
 import com.arny.mlscanner.domain.usecases.barcode.ScanBarcodeUseCase
 import com.arny.mlscanner.domain.models.RecognizedText
@@ -76,10 +77,6 @@ class ScanViewModel(
         applyFiltersDebounced(settings)
     }
 
-    fun onScanModeChanged(mode: ScanMode) {
-        _uiState.update { it.copy(scanMode = mode) }
-    }
-
     fun onCropChanged(cropRect: CropRect) {
         val previewBmp = previewSourceBitmap ?: return
         val originalBmp = originalBitmap ?: return
@@ -136,6 +133,10 @@ class ScanViewModel(
     fun onNewScan() {
         clearBitmaps()
         _uiState.value = ScanUiState()
+    }
+
+    fun onReturnToPreprocessing() {
+        _uiState.update { it.copy(step = ScanStep.PREPROCESSING) }
     }
 
     fun onTextEdited(newText: String) {
@@ -195,7 +196,9 @@ class ScanViewModel(
             updateProgress(0.1f, "Cropping image...")
             val cropped = applyCrop(originalBitmap, state.cropRect)
 
-            if (state.scanMode == ScanMode.BARCODE) {
+            _uiState.update { it.copy(resultBitmap = cropped) }
+
+            if (settings.engineType == OcrEngineType.BARCODE) {
                 updateProgress(0.5f, "Scanning for barcodes...")
                 val barcodeUseCase = scanBarcodeUseCase
                 if (barcodeUseCase == null) {
@@ -249,8 +252,6 @@ class ScanViewModel(
                         )
                     }
                 }
-
-                if (cropped !== originalBitmap) safeRecycle(cropped)
                 return
             }
 
@@ -291,9 +292,8 @@ class ScanViewModel(
                 }
             }
 
-            if (cropped !== originalBitmap) safeRecycle(cropped)
-            if (scaled !== cropped) safeRecycle(scaled)
-            if (processed !== scaled) safeRecycle(processed)
+            if (scaled !== cropped && scaled !== originalBitmap) safeRecycle(scaled)
+            if (processed !== scaled && processed !== originalBitmap) safeRecycle(processed)
 
         } catch (_: CancellationException) {
             _uiState.update { it.copy(step = ScanStep.PREPROCESSING, isScanning = false) }
@@ -382,6 +382,12 @@ class ScanViewModel(
     private fun clearBitmaps() {
         filterJob?.cancel()
         scanJob?.cancel()
+        val state = _uiState.value
+        if (state.resultBitmap != null && 
+            state.resultBitmap !== originalBitmap && 
+            !state.resultBitmap.isRecycled) {
+            state.resultBitmap.recycle()
+        }
         originalBitmap = null
         previewSourceBitmap = null
     }

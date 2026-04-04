@@ -157,9 +157,6 @@ fun AppNavigation(
                 },
                 onGalleryClick = {
                     galleryLauncher.launch("image/*")
-                },
-                onBarcodeClick = {
-                    navController.navigate(Screen.BarcodeScanner.route)
                 }
             )
         }
@@ -209,11 +206,10 @@ fun AppNavigation(
             if (recognizedText != null) {
                 ResultScreen(
                     recognizedText = recognizedText,
+                    resultBitmap = uiState.resultBitmap,
                     onBack = {
-                        viewModel.onNewScan()
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                        viewModel.onReturnToPreprocessing()
+                        navController.popBackStack()
                     },
                     onNewScan = {
                         viewModel.onNewScan()
