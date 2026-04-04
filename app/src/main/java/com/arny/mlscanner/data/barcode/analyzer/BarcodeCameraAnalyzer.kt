@@ -17,8 +17,12 @@ class BarcodeCameraAnalyzer(
     private val engine: BarcodeEngine,
     private val config: BarcodeScanConfig = BarcodeScanConfig(),
     private val deduplicationWindowMs: Long = 2000L,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1) + SupervisorJob())
 ) : ImageAnalysis.Analyzer {
+
+    companion object {
+        private const val THROTTLE_TIMEOUT_MS = 250L // 4 FPS - оптимально для штрихкодов
+    }
 
     private val _results = MutableSharedFlow<List<BarcodeResult>>(replay = 0, extraBufferCapacity = 10)
     val results: SharedFlow<List<BarcodeResult>> = _results
@@ -28,15 +32,25 @@ class BarcodeCameraAnalyzer(
 
     private val isProcessing = AtomicBoolean(false)
     private val recentCodes = mutableMapOf<String, Long>()
+    private var lastAnalyzedTimestamp = 0L
 
     @Volatile
     var isPaused: Boolean = false
 
     override fun analyze(imageProxy: ImageProxy) {
+        val currentTimestamp = System.currentTimeMillis()
+
+        if (currentTimestamp - lastAnalyzedTimestamp < THROTTLE_TIMEOUT_MS) {
+            imageProxy.close()
+            return
+        }
+
         if (isPaused || !isProcessing.compareAndSet(false, true)) {
             imageProxy.close()
             return
         }
+
+        lastAnalyzedTimestamp = currentTimestamp
 
         scope.launch {
             try {

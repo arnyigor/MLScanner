@@ -1,7 +1,5 @@
 package com.arny.mlscanner.di
 
-import com.arny.mlscanner.data.db.AppDatabase
-import com.arny.mlscanner.data.matching.MatchingEngine
 import com.arny.mlscanner.data.ocr.OcrRepositoryImpl
 import com.arny.mlscanner.data.pdf.PdfRedactionEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
@@ -21,14 +19,6 @@ val dataModule = module {
     // Dispatcher
     single<CoroutineDispatcher> { Dispatchers.IO }
 
-    // Database
-    single {
-        AppDatabase.getDatabase(androidContext())
-    }
-    single {
-        get<AppDatabase>().productDao()
-    }
-
     // Preprocessing
     single { ImagePreprocessor() }
 
@@ -42,5 +32,4 @@ val dataModule = module {
 
     // Other data components
     single { PdfRedactionEngine(androidContext()) }
-    single { MatchingEngine(get()) }
 }

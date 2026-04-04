@@ -29,19 +29,30 @@ class CameraAnalyzer(
 
     companion object {
         private const val TAG = "CameraAnalyzer"
+        private const val THROTTLE_TIMEOUT_MS = 500L // 2 FPS - оптимально для OCR
     }
 
     private val isProcessing = AtomicBoolean(false)
+    private var lastAnalyzedTimestamp = 0L
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val rotationMatrix = Matrix()
     private val yuvConverter = YuvConverter
 
     override fun analyze(imageProxy: ImageProxy) {
+        val currentTimestamp = System.currentTimeMillis()
+
+        if (currentTimestamp - lastAnalyzedTimestamp < THROTTLE_TIMEOUT_MS) {
+            imageProxy.close()
+            return
+        }
+
         if (isProcessing.getAndSet(true)) {
             imageProxy.close()
             return
         }
+
+        lastAnalyzedTimestamp = currentTimestamp
 
         scope.launch {
             try {

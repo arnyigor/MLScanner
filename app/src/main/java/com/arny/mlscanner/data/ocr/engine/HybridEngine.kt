@@ -7,8 +7,6 @@ package com.arny.mlscanner.data.ocr.engine
 import android.graphics.Bitmap
 import android.util.Log
 import com.arny.mlscanner.domain.models.OcrResult
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 
 class HybridEngine(
     private val mlkit: OcrEngine,
@@ -33,55 +31,43 @@ class HybridEngine(
     ): OcrResult {
         val totalStart = System.currentTimeMillis()
 
-        return coroutineScope {
-            val tessDeferred = async {
-                if (tesseract.isReady()) {
-                    try {
-                        tesseract.recognize(bitmap, handwrittenMode)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Tesseract failed", e)
-                        null
+        if (mlkit.isReady() && !bitmap.isRecycled) {
+            try {
+                val mlkitResult = mlkit.recognize(bitmap, handwrittenMode)
+
+                if (!mlkitResult.isEmpty) {
+                    val cyrillicCount = mlkitResult.fullText.count { it in 'А'..'я' || it == 'Ё' || it == 'ё' }
+                    val lettersCount = mlkitResult.fullText.count { it.isLetter() }
+                    val cyrillicRatio = if (lettersCount > 0) cyrillicCount.toFloat() / lettersCount else 0f
+
+                    val isConfident = mlkitResult.averageConfidence > 0.6f
+                    val isLanguageValid = cyrillicRatio > 0.2f || lettersCount < 5
+
+                    if (isConfident && isLanguageValid) {
+                        return mlkitResult.copy(
+                            processingTimeMs = System.currentTimeMillis() - totalStart,
+                            engineName = "Hybrid → ML Kit"
+                        )
                     }
-                } else null
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ML Kit failed", e)
             }
-
-            val mlkitDeferred = async {
-                if (mlkit.isReady() && !bitmap.isRecycled) {
-                    try {
-                        mlkit.recognize(bitmap, handwrittenMode)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "ML Kit failed", e)
-                        null
-                    }
-                } else null
-            }
-
-            val tessResult = tessDeferred.await()
-            val mlkitResult = mlkitDeferred.await()
-
-            Log.d(TAG, "Tesseract: words=${tessResult?.wordCount}, conf=${tessResult?.averageConfidence}")
-            Log.d(TAG, "ML Kit: words=${mlkitResult?.wordCount}, conf=${mlkitResult?.averageConfidence}")
-
-            val best = when {
-                tessResult == null || tessResult.isEmpty -> mlkitResult
-                mlkitResult == null || mlkitResult.isEmpty -> tessResult
-                else -> selectBest(tessResult, mlkitResult)
-            }
-
-            val totalTime = System.currentTimeMillis() - totalStart
-            (best ?: OcrResult.EMPTY).copy(
-                processingTimeMs = totalTime,
-                engineName = "Hybrid → ${best?.engineName ?: "None"}"
-            )
         }
-    }
 
-    private fun selectBest(tess: OcrResult, mlkit: OcrResult): OcrResult {
-        // Сравниваем по количеству слов и confidence
-        val tessScore = tess.wordCount * tess.averageConfidence
-        val mlkitScore = mlkit.wordCount * mlkit.averageConfidence
+        if (tesseract.isReady() && !bitmap.isRecycled) {
+            try {
+                val tessResult = tesseract.recognize(bitmap, handwrittenMode)
+                return tessResult.copy(
+                    processingTimeMs = System.currentTimeMillis() - totalStart,
+                    engineName = "Hybrid → Tesseract"
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Tesseract failed", e)
+            }
+        }
 
-        return if (tessScore >= mlkitScore) tess else mlkit
+        return OcrResult.EMPTY.copy(processingTimeMs = System.currentTimeMillis() - totalStart)
     }
 
     override fun release() {

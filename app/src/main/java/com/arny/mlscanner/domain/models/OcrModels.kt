@@ -12,20 +12,3 @@ data class TextBox(
     val confidence: Float,
     val boundingBox: BoundingBox
 )
-
-/**
- * Модели для MatchingEngine.
- */
-data class MatchedItem(
-    val originalText: String,
-    val matchedItem: ProductItem?,
-    val confidence: Float,
-    val boundingBox: BoundingBox
-)
-
-data class MatchingResult(
-    val matchedItems: List<MatchedItem>,
-    val unmatchedTexts: List<String>,
-    val confidenceThreshold: Float,
-    val timestamp: Long
-)

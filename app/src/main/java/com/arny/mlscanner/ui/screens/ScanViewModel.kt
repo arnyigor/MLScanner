@@ -37,7 +37,7 @@ class ScanViewModel(
         private const val PREVIEW_MAX_DIMENSION = 1280
         private const val OCR_MIN_DIMENSION = 800
         private const val OCR_MAX_DIMENSION = 2048
-        private const val FILTER_DEBOUNCE_MS = 150L
+        private const val FILTER_DEBOUNCE_MS = 350L
     }
 
     private val _uiState = MutableStateFlow(ScanUiState())
