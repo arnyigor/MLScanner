@@ -44,6 +44,15 @@ mockito = "5.21.0"
 mockitoKotlin = "5.2.1"
 archCoreTesting = "2.2.0"
 
+# Barcode scanning
+mlkitBarcode = "17.3.0"
+zxingAndroid = "4.3.0"
+zxingCore = "3.5.3"
+
+# Text post-processing
+apacheCommonsText = "1.12.0"
+icu4j = "75.1"
+
 [libraries]
 # ML Kit Text Recognition V2 (offline)
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraxVersion" }
@@ -109,6 +118,19 @@ mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlin" }
 androidx-core-testing = { module = "androidx.arch.core:core-testing", version.ref = "archCoreTesting" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+
+# ML Kit Barcode Scanning
+mlkit-barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "mlkitBarcode" }
+
+# ZXing (offline fallback)
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingAndroid" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
+
+# Apache Commons Text (для Levenshtein distance)
+apache-commons-text = { module = "org.apache.commons:commons-text", version.ref = "apacheCommonsText" }
+
+# ICU4J (Unicode normalization)
+icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

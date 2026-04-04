@@ -51,3 +51,9 @@ enum class OcrLanguage(
         }
     }
 }
+
+enum class OcrEngineType(val displayName: String) {
+    ML_KIT("ML Kit"),
+    TESSERACT("Tesseract"),
+    HYBRID("Hybrid")
+}

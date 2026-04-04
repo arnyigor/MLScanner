@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,7 +36,8 @@ fun HomeScreenPreview() {
     MaterialTheme {
         HomeScreen(
             onCameraClick = {},
-            onGalleryClick = {}
+            onGalleryClick = {},
+            onBarcodeClick = {}
         )
     }
 }
@@ -45,6 +47,7 @@ fun HomeScreenPreview() {
 fun HomeScreen(
     onCameraClick: () -> Unit,
     onGalleryClick: () -> Unit,
+    onBarcodeClick: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -102,6 +105,15 @@ fun HomeScreen(
                 title = "File",
                 description = "Choose an image from device",
                 onClick = onGalleryClick
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            SourceCard(
+                icon = Icons.Default.QrCodeScanner,
+                title = "Barcode Scanner",
+                description = "Scan QR codes and barcodes",
+                onClick = onBarcodeClick
             )
 
             Spacer(Modifier.height(48.dp))

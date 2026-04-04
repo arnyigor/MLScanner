@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.usecases.RecognizeTextUseCase
+import com.arny.mlscanner.domain.usecases.barcode.ScanBarcodeUseCase
+import com.arny.mlscanner.domain.models.RecognizedText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,14 +27,15 @@ import kotlinx.coroutines.sync.withLock
 
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
-    private val imagePreprocessor: ImagePreprocessor
+    private val imagePreprocessor: ImagePreprocessor,
+    private val scanBarcodeUseCase: ScanBarcodeUseCase? = null
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "ScanViewModel"
         private const val PREVIEW_MAX_DIMENSION = 1280
-        private const val OCR_MIN_DIMENSION = 2000
-        private const val OCR_MAX_DIMENSION = 3000
+        private const val OCR_MIN_DIMENSION = 800
+        private const val OCR_MAX_DIMENSION = 2048
         private const val FILTER_DEBOUNCE_MS = 150L
     }
 
@@ -71,6 +74,10 @@ class ScanViewModel(
     fun onSettingsChanged(settings: ScanSettings) {
         _uiState.update { it.copy(settings = settings) }
         applyFiltersDebounced(settings)
+    }
+
+    fun onScanModeChanged(mode: ScanMode) {
+        _uiState.update { it.copy(scanMode = mode) }
     }
 
     fun onCropChanged(cropRect: CropRect) {
@@ -187,6 +194,65 @@ class ScanViewModel(
 
             updateProgress(0.1f, "Cropping image...")
             val cropped = applyCrop(originalBitmap, state.cropRect)
+
+            if (state.scanMode == ScanMode.BARCODE) {
+                updateProgress(0.5f, "Scanning for barcodes...")
+                val barcodeUseCase = scanBarcodeUseCase
+                if (barcodeUseCase == null) {
+                    Log.w(TAG, "Barcode scanning not available")
+                    _uiState.update {
+                        it.copy(
+                            step = ScanStep.PREPROCESSING,
+                            isScanning = false,
+                            error = ScanError.OcrFailed("Barcode scanning not configured")
+                        )
+                    }
+                    return
+                }
+
+                try {
+                    val barcodes = barcodeUseCase(cropped)
+                    if (barcodes.isNotEmpty()) {
+                        val barcode = barcodes.first()
+                        val recognized = RecognizedText(
+                            originalText = barcode.rawValue,
+                            formattedText = "Формат: ${barcode.format.name}\n\nРезультат:\n${barcode.rawValue}",
+                            blocks = emptyList(),
+                            confidence = 1.0f,
+                            detectedLanguage = "N/A"
+                        )
+                        updateProgress(1.0f, "Done!")
+                        _uiState.update {
+                            it.copy(
+                                step = ScanStep.RESULT,
+                                recognizedText = recognized,
+                                isScanning = false,
+                                processingProgress = 1f
+                            )
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                step = ScanStep.PREPROCESSING,
+                                isScanning = false,
+                                error = ScanError.OcrFailed("Barcode not found")
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Barcode scanning error", e)
+                    _uiState.update {
+                        it.copy(
+                            step = ScanStep.PREPROCESSING,
+                            isScanning = false,
+                            error = ScanError.OcrFailed(e.message ?: "Barcode scan failed")
+                        )
+                    }
+                }
+
+                if (cropped !== originalBitmap) safeRecycle(cropped)
+                return
+            }
 
             updateProgress(0.2f, "Optimizing resolution...")
             val (scaled, needsForceBinarize) = scaleForOcr(cropped)

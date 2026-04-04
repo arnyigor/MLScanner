@@ -7,6 +7,7 @@ val appModule = module {
         networkModule,
         dataModule,
         domainModule,
-        viewModelModule
+        viewModelModule,
+        barcodeModule
     )
 }

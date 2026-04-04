@@ -169,7 +169,7 @@ room {
 
 dependencies {
 // ML Kit Text Recognition V2 (offline)
-implementation(libs.text.recognition) // Latin + Cyrillic
+implementation(libs.text.recognition) // Latin + Cyrillic via language hints
 implementation(libs.language.id) // Language detection
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
     implementation(libs.onnxruntime)
@@ -243,6 +243,15 @@ implementation(libs.language.id) // Language detection
 
     // OpenCSV для импорта CSV
     implementation(libs.opencsv)
+
+    // === BARCODE SCANNING ===
+    implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.zxing.android.embedded)
+    implementation(libs.zxing.core)
+
+    // === TEXT POST-PROCESSING ===
+    implementation(libs.apache.commons.text)
+    implementation(libs.icu4j)
 
     // Unit Testing
     // ---------- Тестовые зависимости ----------

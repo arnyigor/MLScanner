@@ -4,6 +4,12 @@ import android.graphics.Bitmap
 import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.ScanSettings
 
+enum class ScanMode {
+    ML_KIT_TEXT,
+    TESSERACT_TEXT,
+    BARCODE
+}
+
 /**
  * Единый sealed-state для всего процесса сканирования.
  * Вместо множества отдельных StateFlow — один источник истины.
@@ -11,6 +17,7 @@ import com.arny.mlscanner.domain.models.ScanSettings
 data class ScanUiState(
     val step: ScanStep = ScanStep.CAMERA,
     val settings: ScanSettings = ScanSettings.DEFAULT,
+    val scanMode: ScanMode = ScanMode.ML_KIT_TEXT,
     val previewBitmap: Bitmap? = null,
     val processingProgress: Float = 0f,
     val processingMessage: String = "",

@@ -35,10 +35,12 @@ class MLKitEngine : OcrEngine {
         return mutex.withLock {
             if (ready) return@withLock true
             try {
-                // Базовая библиотека (Latin) отлично распознает русский язык
+                // ML Kit v2 - uses bundled model for offline OCR
+                // Supports Latin, Cyrillic, Chinese, Japanese, Korean, Devanagari scripts
+                // https://developers.google.com/ml-kit/vision/text-recognition/v2/android
                 recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
                 ready = true
-                Log.i(TAG, "ML Kit initialized")
+                Log.i(TAG, "ML Kit initialized (bundled model)")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "ML Kit init failed", e)

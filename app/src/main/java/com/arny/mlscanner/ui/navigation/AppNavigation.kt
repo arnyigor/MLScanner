@@ -32,6 +32,7 @@ import com.arny.mlscanner.ui.screens.ScanStep
 import com.arny.mlscanner.ui.screens.ScanUiEvent
 import com.arny.mlscanner.ui.screens.ScanViewModel
 import com.arny.mlscanner.ui.screens.ScanningScreen
+import com.arny.mlscanner.ui.screens.BarcodeScannerScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -45,6 +46,7 @@ sealed class Screen(val route: String) {
     data object Preprocessing : Screen("preprocessing")
     data object Scanning : Screen("scanning")
     data object Result : Screen("result")
+    data object BarcodeScanner : Screen("barcode_scanner")
 }
 
 @Composable
@@ -155,6 +157,9 @@ fun AppNavigation(
                 },
                 onGalleryClick = {
                     galleryLauncher.launch("image/*")
+                },
+                onBarcodeClick = {
+                    navController.navigate(Screen.BarcodeScanner.route)
                 }
             )
         }
@@ -221,6 +226,16 @@ fun AppNavigation(
                     onTextEdited = { viewModel.onTextEdited(it) }
                 )
             }
+        }
+
+        // ─── Barcode Scanner ───
+        composable(Screen.BarcodeScanner.route) {
+            BarcodeScannerScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onResultClick = { result ->
+                    Toast.makeText(context, "Scanned: ${result.rawValue}", Toast.LENGTH_SHORT).show()
+                }
+            )
         }
     }
 }

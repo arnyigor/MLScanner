@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
@@ -32,10 +33,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -50,6 +55,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.arny.mlscanner.domain.models.OcrEngineType
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.ui.navigation.Screen
 import org.koin.androidx.compose.koinViewModel
@@ -61,6 +67,7 @@ fun PreprocessingScreenPreview() {
         previewBitmap = null,
         onStartScan = { _, _ -> },
         onUpdateSettings = { },
+        onScanModeChanged = { },
         onBack = { }
     )
 }
@@ -78,8 +85,10 @@ fun PreprocessingRoute(
         PreprocessingScreen(
             previewBitmap = previewBitmap,
             settings = uiState.settings,
+            scanMode = uiState.scanMode,
             isApplyingFilters = uiState.isApplyingFilters,
             onUpdateSettings = viewModel::onSettingsChanged,
+            onScanModeChanged = viewModel::onScanModeChanged,
             onCropChanged = viewModel::onCropChanged,
             onStartScan = { _, cropRect ->
                 if (cropRect != null) {
@@ -108,8 +117,10 @@ fun PreprocessingRoute(
 fun PreprocessingScreen(
     previewBitmap: Bitmap?,
     settings: ScanSettings = ScanSettings.DEFAULT,
+    scanMode: ScanMode = ScanMode.ML_KIT_TEXT,
     isApplyingFilters: Boolean = false,
     onUpdateSettings: (ScanSettings) -> Unit = {},
+    onScanModeChanged: (ScanMode) -> Unit = {},
     onCropChanged: (CropRect) -> Unit = {},
     onStartScan: (ScanSettings, CropRect?) -> Unit = { _, _ -> },
     onRotate: (Float) -> Unit = {},
@@ -122,6 +133,7 @@ fun PreprocessingScreen(
     var binarizationEnabled by remember(settings) { mutableStateOf(settings.binarizationEnabled) }
     var autoRotateEnabled by remember(settings) { mutableStateOf(settings.autoRotateEnabled) }
     var handwrittenMode by remember(settings) { mutableStateOf(settings.handwrittenMode) }
+    var engineType by remember(settings) { mutableStateOf(settings.engineType) }
     var cropRect by remember { mutableStateOf<CropRect?>(null) }
 
     // ▶ НОВОЕ: Режим превью: компактный или полноэкранный
@@ -139,7 +151,8 @@ fun PreprocessingScreen(
                 denoiseEnabled = denoiseEnabled,
                 autoRotateEnabled = autoRotateEnabled,
                 binarizationEnabled = binarizationEnabled,
-                handwrittenMode = handwrittenMode
+                handwrittenMode = handwrittenMode,
+                engineType = engineType
             )
         )
     }
@@ -244,6 +257,39 @@ fun PreprocessingScreen(
                 }
             }
 
+            // ═══ Выбор режима сканирования ═══
+            Text(
+                "Scan Mode",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                ScanMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = scanMode == mode,
+                        onClick = { onScanModeChanged(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = ScanMode.entries.size
+                        )
+                    ) {
+                        Text(
+                            when (mode) {
+                                ScanMode.ML_KIT_TEXT -> "ML Kit"
+                                ScanMode.TESSERACT_TEXT -> "Tesseract"
+                                ScanMode.BARCODE -> "Barcode"
+                            },
+                            style = androidx.compose.material3.MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+
             // ═══ Кнопка сканирования ═══
             FilledTonalButton(
                 onClick = { onStartScan(settings, cropRect) },
@@ -251,97 +297,137 @@ fun PreprocessingScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                Icon(Icons.Default.DocumentScanner, "Scan", Modifier.size(20.dp))
+                Icon(
+                    when (scanMode) {
+                        ScanMode.BARCODE -> Icons.Default.QrCodeScanner
+                        else -> Icons.Default.DocumentScanner
+                    },
+                    "Scan",
+                    Modifier.size(20.dp)
+                )
                 Spacer(Modifier.width(8.dp))
-                Text("Start Scanning")
+                Text(
+                    when (scanMode) {
+                        ScanMode.BARCODE -> "Scan Barcode"
+                        else -> "Start Scanning"
+                    }
+                )
             }
 
-            // ═══ Настройки фильтров ═══
-            Text(
-                "Image Enhancement",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+            // Скрываем фильтры и движок в режиме Barcode
+            if (scanMode != ScanMode.BARCODE) {
+                // ═══ Выбор OCR движка ═══
+                Text(
+                    "OCR Engine",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
 
-            SliderControl(
-                label = "Contrast",
-                value = contrastLevel,
-                onValueChange = { newValue -> contrastLevel = newValue },
-                onValueChangeFinished = { emitSettings() },
-                valueRange = 0.5f..2.0f,
-                valueDisplay = "${(contrastLevel * 100).toInt()}%"
-            )
-
-            SliderControl(
-                label = "Brightness",
-                value = brightnessLevel,
-                onValueChange = { newValue -> brightnessLevel = newValue },
-                onValueChangeFinished = { emitSettings() },
-                valueRange = -100f..100f,
-                valueDisplay = brightnessLevel.toInt().toString()
-            )
-
-            SliderControl(
-                label = "Sharpness",
-                value = sharpenLevel,
-                onValueChange = { newValue -> sharpenLevel = newValue },
-                onValueChangeFinished = { emitSettings() },
-                valueRange = 0f..2.0f,
-                valueDisplay = "${(sharpenLevel * 100).toInt()}%"
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Text(
-                text = "Processing Options",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            SwitchControl(
-                label = "Noise Reduction",
-                description = "Remove image noise for better accuracy",
-                checked = denoiseEnabled,
-                onCheckedChange = { newValue ->
-                    denoiseEnabled = newValue
-                    emitSettings()
-                }
-            )
-
-            SwitchControl(
-                label = "Binarization",
-                description = "Convert to black & white for documents",
-                checked = binarizationEnabled,
-                onCheckedChange = { newValue ->
-                    binarizationEnabled = newValue
-                    emitSettings()
-                }
-            )
-
-            // ▶ НОВОЕ: Рукописный текст
-            SwitchControl(
-                label = "Handwritten Text",
-                description = "Optimize for handwritten text recognition",
-                checked = handwrittenMode,
-                onCheckedChange = { newValue ->
-                    handwrittenMode = newValue
-                    if (newValue) {
-                        contrastLevel = 1.8f
-                        binarizationEnabled = true
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OcrEngineType.entries.forEach { type ->
+                        FilterChip(
+                            selected = engineType == type,
+                            onClick = {
+                                engineType = type
+                                emitSettings()
+                            },
+                            label = { Text(type.displayName) }
+                        )
                     }
-                    emitSettings()
                 }
-            )
 
-            SwitchControl(
-                label = "Auto-Rotate",
-                description = "Automatically correct orientation",
-                checked = autoRotateEnabled,
-                onCheckedChange = { newValue ->
-                    autoRotateEnabled = newValue
-                    emitSettings()
-                }
-            )
+                // ═══ Настройки фильтров ═══
+                Text(
+                    "Image Enhancement",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+
+                SliderControl(
+                    label = "Contrast",
+                    value = contrastLevel,
+                    onValueChange = { newValue -> contrastLevel = newValue },
+                    onValueChangeFinished = { emitSettings() },
+                    valueRange = 0.5f..2.0f,
+                    valueDisplay = "${(contrastLevel * 100).toInt()}%"
+                )
+
+                SliderControl(
+                    label = "Brightness",
+                    value = brightnessLevel,
+                    onValueChange = { newValue -> brightnessLevel = newValue },
+                    onValueChangeFinished = { emitSettings() },
+                    valueRange = -100f..100f,
+                    valueDisplay = brightnessLevel.toInt().toString()
+                )
+
+                SliderControl(
+                    label = "Sharpness",
+                    value = sharpenLevel,
+                    onValueChange = { newValue -> sharpenLevel = newValue },
+                    onValueChangeFinished = { emitSettings() },
+                    valueRange = 0f..2.0f,
+                    valueDisplay = "${(sharpenLevel * 100).toInt()}%"
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                Text(
+                    text = "Processing Options",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+
+                SwitchControl(
+                    label = "Noise Reduction",
+                    description = "Remove image noise for better accuracy",
+                    checked = denoiseEnabled,
+                    onCheckedChange = { newValue ->
+                        denoiseEnabled = newValue
+                        emitSettings()
+                    }
+                )
+
+                SwitchControl(
+                    label = "Binarization",
+                    description = "Convert to black & white for documents",
+                    checked = binarizationEnabled,
+                    onCheckedChange = { newValue ->
+                        binarizationEnabled = newValue
+                        emitSettings()
+                    }
+                )
+
+                // ▶ НОВОЕ: Рукописный текст
+                SwitchControl(
+                    label = "Handwritten Text",
+                    description = "Optimize for handwritten text recognition",
+                    checked = handwrittenMode,
+                    onCheckedChange = { newValue ->
+                        handwrittenMode = newValue
+                        if (newValue) {
+                            contrastLevel = 1.8f
+                            binarizationEnabled = true
+                        }
+                        emitSettings()
+                    }
+                )
+
+                SwitchControl(
+                    label = "Auto-Rotate",
+                    description = "Automatically correct orientation",
+                    checked = autoRotateEnabled,
+                    onCheckedChange = { newValue ->
+                        autoRotateEnabled = newValue
+                        emitSettings()
+                    }
+                )
+            }
 
             Spacer(Modifier.height(80.dp))
         }

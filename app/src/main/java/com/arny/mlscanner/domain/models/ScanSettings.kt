@@ -32,9 +32,10 @@ package com.arny.mlscanner.domain.models
      val binarizationEnabled: Boolean = false,
      val autoRotateEnabled: Boolean = true,
      // ▶ НОВОЕ: Режим рукописного текста
-     val handwrittenMode: Boolean = false,
-     val language: OcrLanguage = OcrLanguage.DEFAULT,
-     val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
+      val handwrittenMode: Boolean = false,
+      val language: OcrLanguage = OcrLanguage.DEFAULT,
+      val engineType: OcrEngineType = OcrEngineType.ML_KIT,
+      val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
  ) {
     init {
         require(contrastLevel in 0.1f..5.0f) {

@@ -8,6 +8,7 @@ import com.arny.mlscanner.data.ocr.engine.MLKitEngine
 import com.arny.mlscanner.data.ocr.engine.OcrEngine
 import com.arny.mlscanner.data.ocr.engine.TesseractEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
+import com.arny.mlscanner.domain.models.OcrEngineType
 import com.arny.mlscanner.domain.models.OcrResult
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.usecases.OcrRepository
@@ -83,7 +84,14 @@ class OcrRepositoryImpl(
 
         val processed = imagePreprocessor.prepareBaseImage(bitmap, settings)
 
-        val result = hybridEngine.recognize(processed, settings.handwrittenMode)
+        val engine: OcrEngine = when (settings.engineType) {
+            OcrEngineType.ML_KIT -> mlkitEngine
+            OcrEngineType.TESSERACT -> tesseractEngine
+            OcrEngineType.HYBRID -> hybridEngine
+        }
+
+        Log.d(TAG, "Using engine: ${settings.engineType.name}")
+        val result = engine.recognize(processed, settings.handwrittenMode)
 
         if (processed !== bitmap && !processed.isRecycled) {
             processed.recycle()
