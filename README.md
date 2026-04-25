@@ -7,6 +7,7 @@ Android OCR/scanner app with ML Kit, Tesseract and ZXing.
 - **ML Kit** — Google ML Kit Text Recognition v2
 - **Tesseract** — Tesseract OCR 5.x с поддержкой русского и английского языков
 - **ZXing** — Barcode scanning
+- **Paddle OCR** — *Пробовали использовать, но модель не подходит для качественного распознавания русского языка.*
 
 ## Build
 
