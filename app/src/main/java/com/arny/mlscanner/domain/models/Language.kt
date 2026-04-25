@@ -52,9 +52,23 @@ enum class OcrLanguage(
     }
 }
 
-enum class OcrEngineType(val displayName: String) {
-    ML_KIT("ML Kit"),
-    TESSERACT("Tesseract"),
-    HYBRID("Hybrid"),
-    BARCODE("Штрихкод")
+enum class OcrEngineType(
+    val displayName: String,
+    val isExperimental: Boolean = false
+) {
+    TESSERACT("Tesseract", isExperimental = false),
+    ML_KIT("ML Kit", isExperimental = false),
+    HYBRID("Hybrid", isExperimental = false),
+    BARCODE("Штрихкод", isExperimental = false);
+
+    companion object {
+        /** Рекомендуемый движок для русского текста */
+        val DEFAULT_FOR_RUSSIAN = TESSERACT
+        
+        /** Рекомендуемый движок для английского текста */
+        val DEFAULT_FOR_ENGLISH = ML_KIT
+        
+        /** Стабильные движки (не experimental) */
+        val STABLE_ENGINES = entries.filter { !it.isExperimental }
+    }
 }

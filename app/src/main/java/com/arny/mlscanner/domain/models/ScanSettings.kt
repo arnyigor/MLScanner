@@ -34,8 +34,10 @@ package com.arny.mlscanner.domain.models
      // ▶ НОВОЕ: Режим рукописного текста
       val handwrittenMode: Boolean = false,
       val language: OcrLanguage = OcrLanguage.DEFAULT,
-      val engineType: OcrEngineType = OcrEngineType.ML_KIT,
-      val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
+      val engineType: OcrEngineType = OcrEngineType.TESSERACT,
+      val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD,
+      // ▶ НОВОЕ: Multi-pass режим для Tesseract
+      val useMultiPass: Boolean = false
  ) {
     init {
         require(contrastLevel in 0.1f..5.0f) {

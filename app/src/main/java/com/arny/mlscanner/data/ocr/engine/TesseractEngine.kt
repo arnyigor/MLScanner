@@ -18,6 +18,7 @@ import java.io.File
 import java.io.FileOutputStream
 import androidx.core.graphics.scale
 import androidx.core.graphics.createBitmap
+import com.arny.mlscanner.data.ocr.postprocessing.TextPostProcessor
 
 class TesseractEngine(private val context: Context) : OcrEngine {
 
@@ -36,6 +37,12 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         private const val MIN_SHORT_SIDE = 400      // Апскейл если короткая < этого
         private const val TARGET_SHORT_SIDE = 600   // Апскейлим до этого
         private const val MAX_UPSCALE = 3f          // Макс множитель апскейла
+
+        // Scoring weights
+        private const val WEIGHT_CONFIDENCE = 1.2f
+        private const val WEIGHT_WORDS = 1.5f
+        private const val WEIGHT_CYRILLIC_RATIO = 20f
+        private const val WEIGHT_GARBAGE_PENALTY = 30f
     }
 
     private var tessApi: TessBaseAPI? = null
@@ -45,6 +52,12 @@ class TesseractEngine(private val context: Context) : OcrEngine {
     override suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (ready) return@withContext true
+
+            // Детект ARM-translation эмулятора (x86_64 с ARM libs)
+            if (isArmTranslationEmulator()) {
+                Log.w(TAG, "ARM-translation emulator detected, Tesseract disabled")
+                return@withContext false
+            }
 
             try {
                 val dataPath = copyTessDataSafe()
@@ -130,6 +143,28 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         return bitmap
     }
 
+    /**
+     * Детектит ARM-translation эмулятор (x86_64 с ARM native libs).
+     * На таких эмуляторах Tesseract падает с SIGILL в ndk_translation.
+     */
+    private fun isArmTranslationEmulator(): Boolean {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: return false
+        val isX86 = abi.contains("x86")
+        val hasArmLibs = Build.SUPPORTED_ABIS.any { it.contains("arm") }
+        val isEmulator = Build.FINGERPRINT.contains("generic") ||
+                         Build.FINGERPRINT.contains("emulator") ||
+                         Build.MODEL.contains("Emulator") ||
+                         Build.MODEL.contains("Android SDK")
+        
+        val result = isX86 && hasArmLibs && isEmulator
+        if (result) {
+            Log.w(TAG, "ARM-translation detected: abi=$abi, " +
+                "supported=${Build.SUPPORTED_ABIS.joinToString()}, " +
+                "model=${Build.MODEL}")
+        }
+        return result
+    }
+
     private fun configureApi(api: TessBaseAPI) {
         api.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
 
@@ -149,6 +184,288 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         withContext(Dispatchers.Default) {
             recognizeInternal(bitmap, handwrittenMode)
         }
+    }
+
+    /**
+     * Multi-pass распознавание с выбором лучшего результата.
+     * 
+     * Запускает несколько профилей параллельно и выбирает лучший по scoring.
+     */
+    suspend fun recognizeMultiPass(
+        bitmap: Bitmap,
+        profiles: List<TesseractProfile>
+    ): OcrCandidate = withContext(Dispatchers.Default) {
+        if (profiles.isEmpty()) {
+            val defaultResult = recognize(bitmap, false)
+            return@withContext OcrCandidate(
+                profile = TesseractProfile.RUSSIAN_PROFILES.first(),
+                result = defaultResult,
+                score = scoreResult(defaultResult)
+            )
+        }
+
+        val candidates = profiles.map { profile ->
+            val result = recognizeWithProfile(bitmap, profile)
+            val score = scoreResult(result)
+            OcrCandidate(profile, result, score)
+        }
+
+        val best = candidates.maxByOrNull { it.score } ?: candidates.first()
+        
+        Log.d(TAG, "Multi-pass: ${candidates.size} profiles, best='${best.profile.name}' " +
+                "score=${best.score}, conf=${best.confidence}, words=${best.wordCount}")
+        
+        best
+    }
+
+    /**
+     * Распознавание с конкретным профилем.
+     */
+    private suspend fun recognizeWithProfile(
+        bitmap: Bitmap,
+        profile: TesseractProfile
+    ): OcrResult = mutex.withLock {
+        withContext(Dispatchers.Default) {
+            val api = tessApi
+            if (api == null || !ready) {
+                Log.w(TAG, "Tesseract not ready")
+                return@withContext OcrResult.EMPTY
+            }
+
+            val startTime = System.currentTimeMillis()
+            
+            // Применяем preprocessing согласно профилю
+            val preprocessed = applyPreprocessing(bitmap, profile.preprocessMode)
+            val optimized = ensureOptimalSize(preprocessed)
+            val safeBitmap = ensureSafeBitmap(optimized)
+
+            try {
+                // Устанавливаем язык
+                if (api.init(context.filesDir.absolutePath, profile.language.code)) {
+                    api.pageSegMode = profile.psm
+                    api.setVariable("preserve_interword_spaces", "1")
+                    api.setVariable("textord_heavy_nr", "1")
+                    api.setVariable("textord_min_xheight", "6")
+                }
+
+                try {
+                    api.setImage(safeBitmap)
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.e(TAG, "Native crash in setImage, profile ${profile.name}", e)
+                    api.clear()
+                    return@withContext OcrResult.EMPTY.copy(
+                        processingTimeMs = System.currentTimeMillis() - startTime,
+                        engineName = "$name[${profile.name}:CRASHED]"
+                    )
+                } catch (e: Error) {
+                    Log.e(TAG, "Fatal error in setImage, profile ${profile.name}", e)
+                    api.clear()
+                    return@withContext OcrResult.EMPTY.copy(
+                        processingTimeMs = System.currentTimeMillis() - startTime,
+                        engineName = "$name[${profile.name}:ERROR]"
+                    )
+                }
+
+                val rawFullText = try {
+                    api.utF8Text.orEmpty()
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.e(TAG, "Native crash in utF8Text, profile ${profile.name}", e)
+                    api.clear()
+                    return@withContext OcrResult.EMPTY.copy(
+                        processingTimeMs = System.currentTimeMillis() - startTime,
+                        engineName = "$name[${profile.name}:CRASHED]"
+                    )
+                } catch (e: Error) {
+                    Log.e(TAG, "Fatal error in utF8Text, profile ${profile.name}", e)
+                    api.clear()
+                    return@withContext OcrResult.EMPTY.copy(
+                        processingTimeMs = System.currentTimeMillis() - startTime,
+                        engineName = "$name[${profile.name}:ERROR]"
+                    )
+                }
+
+                if (rawFullText.isBlank()) {
+                    api.clear()
+                    return@withContext OcrResult.EMPTY.copy(
+                        processingTimeMs = System.currentTimeMillis() - startTime,
+                        engineName = "$name[${profile.name}]"
+                    )
+                }
+
+                val meanConf = api.meanConfidence()
+                val rawWords = extractWords(api)
+                api.clear()
+
+                val cleanedWords = postProcessWords(rawWords)
+                val blocks = buildBlocksFromWords(cleanedWords)
+                
+                // Используем rawFullText как основной источник (сохраняет reading order)
+                val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
+                val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
+                val fullText = chooseBestText(rawText, boxedText)
+                
+                val avgConf = if (cleanedWords.isNotEmpty()) {
+                    cleanedWords.map { it.confidence / 100f }.average().toFloat()
+                } else meanConf / 100f
+
+                val elapsed = System.currentTimeMillis() - startTime
+
+                return@withContext OcrResult(
+                    blocks = blocks,
+                    fullText = fullText,
+                    formattedText = fullText,
+                    averageConfidence = avgConf,
+                    processingTimeMs = elapsed,
+                    engineName = "$name[${profile.name}]",
+                    imageWidth = bitmap.width,
+                    imageHeight = bitmap.height
+                )
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Recognition error with profile ${profile.name}", e)
+                api.clear()
+                return@withContext OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[${profile.name}]"
+                )
+            } finally {
+                if (safeBitmap !== bitmap && safeBitmap !== optimized && safeBitmap !== preprocessed) {
+                    safeBitmap.recycle()
+                }
+                if (optimized !== bitmap && optimized !== preprocessed) {
+                    optimized.recycle()
+                }
+                if (preprocessed !== bitmap) {
+                    preprocessed.recycle()
+                }
+            }
+        }
+    }
+
+    /**
+     * Scoring результата OCR.
+     * 
+     * Учитывает:
+     * - Confidence
+     * - Количество слов
+     * - Соотношение кириллицы (для русского)
+     * - Наличие мусорных символов
+     * - Структурные паттерны (даты, метки, URL)
+     */
+    private fun scoreResult(result: OcrResult): Float {
+        val text = result.fullText
+        if (text.isBlank()) return 0f
+
+        val words = text.split(Regex("\\s+")).count { it.length > 1 }
+        val letters = text.count { it.isLetter() }.coerceAtLeast(1)
+        val cyrillicCount = text.count { it in 'А'..'я' || it == 'Ё' || it == 'ё' }
+        val garbageCount = text.count { it == '�' || it == '|' || it == '~' }
+
+        val cyrillicRatio = cyrillicCount.toFloat() / letters
+        val garbageRatio = garbageCount.toFloat() / text.length.coerceAtLeast(1)
+        val structureBonus = documentStructureBonus(text)
+
+        return result.averageConfidence * 100f * WEIGHT_CONFIDENCE +
+                words * WEIGHT_WORDS +
+                cyrillicRatio * WEIGHT_CYRILLIC_RATIO -
+                garbageRatio * WEIGHT_GARBAGE_PENALTY +
+                structureBonus
+    }
+
+    /**
+     * Бонус за наличие структурных паттернов в документе.
+     * Использует ТОЛЬКО универсальные паттерны, не привязывается к конкретным словам.
+     */
+    private fun documentStructureBonus(text: String): Float {
+        var bonus = 0f
+
+        // Паттерн: дата (число + месяц)
+        if (text.contains(Regex("""\d{1,2}\s+[а-яё]+""", RegexOption.IGNORE_CASE))) {
+            bonus += 5f
+        }
+
+        // Паттерн: метки с двоеточием ("Задание:", "Примечание:", etc)
+        val labelCount = Regex("""[А-ЯЁA-Z][а-яёa-z\s]+:""").findAll(text).count()
+        bonus += labelCount * 3f
+
+        // Паттерн: URL
+        if (text.contains(Regex("""https?://"""))) {
+            bonus += 8f
+        }
+
+        // Паттерн: номера (№)
+        if (text.contains(Regex("""№\s*\d+"""))) {
+            bonus += 3f
+        }
+
+        // Паттерн: нумерованные списки
+        val listItemCount = Regex("""^\s*[0-9]+[.)]""", RegexOption.MULTILINE).findAll(text).count()
+        bonus += listItemCount * 2f
+
+        return bonus.coerceAtMost(40f) // Ограничиваем максимальный бонус
+    }
+
+    /**
+     * Выбирает лучший текст между raw и boxed.
+     * Raw text обычно лучше сохраняет reading order.
+     */
+    private fun chooseBestText(rawText: String, boxedText: String): String {
+        if (rawText.isBlank()) return boxedText
+        if (boxedText.isBlank()) return rawText
+
+        val rawWords = countWords(rawText)
+        val boxedWords = countWords(boxedText)
+
+        // Raw text предпочтительнее если он не сильно короче
+        return if (rawWords >= boxedWords * 0.85f) {
+            rawText
+        } else {
+            boxedText
+        }
+    }
+
+    private fun countWords(text: String): Int {
+        return text.split(Regex("\\s+")).count { it.length > 1 }
+    }
+
+    /**
+     * Применяет preprocessing согласно режиму.
+     */
+    private fun applyPreprocessing(bitmap: Bitmap, mode: PreprocessMode): Bitmap {
+        return when (mode) {
+            PreprocessMode.ORIGINAL -> bitmap
+            PreprocessMode.CONTRAST_ENHANCED -> applyContrastEnhancement(bitmap)
+            PreprocessMode.ADAPTIVE_THRESHOLD -> applyAdaptiveThreshold(bitmap)
+            PreprocessMode.UPSCALE_2X -> bitmap.scale(bitmap.width * 2, bitmap.height * 2)
+            PreprocessMode.SHARPEN_LIGHT -> applySharpen(bitmap, 0.5f)
+        }
+    }
+
+    private fun applyContrastEnhancement(bitmap: Bitmap): Bitmap {
+        // Простое усиление контраста через ColorMatrix
+        val result = createBitmap(bitmap.width, bitmap.height)
+        val canvas = android.graphics.Canvas(result)
+        val paint = android.graphics.Paint()
+        
+        val cm = android.graphics.ColorMatrix(floatArrayOf(
+            1.5f, 0f, 0f, 0f, -64f,
+            0f, 1.5f, 0f, 0f, -64f,
+            0f, 0f, 1.5f, 0f, -64f,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+        return result
+    }
+
+    private fun applyAdaptiveThreshold(bitmap: Bitmap): Bitmap {
+        // Заглушка - требует OpenCV, пока возвращаем оригинал
+        return bitmap
+    }
+
+    private fun applySharpen(bitmap: Bitmap, level: Float): Bitmap {
+        // Заглушка - требует OpenCV, пока возвращаем оригинал
+        return bitmap
     }
 
     private fun recognizeInternal(
@@ -172,9 +489,41 @@ class TesseractEngine(private val context: Context) : OcrEngine {
                 api.pageSegMode = selectPsm(safeBitmap)
             }
 
-            api.setImage(safeBitmap)
+            try {
+                api.setImage(safeBitmap)
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Native crash in setImage (ARM-translation issue)", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[CRASHED]"
+                )
+            } catch (e: Error) {
+                Log.e(TAG, "Fatal error in setImage", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[ERROR]"
+                )
+            }
 
-            val rawFullText = api.utF8Text.orEmpty()
+            val rawFullText = try {
+                api.utF8Text.orEmpty()
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Native crash in utF8Text (ARM-translation issue)", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[CRASHED]"
+                )
+            } catch (e: Error) {
+                Log.e(TAG, "Fatal error in utF8Text", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[ERROR]"
+                )
+            }
 
             if (rawFullText.isBlank()) {
                 Log.w(TAG, "Tesseract returned empty text")
@@ -193,7 +542,12 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
             val cleanedWords = postProcessWords(rawWords)
             val blocks = buildBlocksFromWords(cleanedWords)
-            val fullText = buildFullTextFromBlocks(blocks)
+            
+            // Используем rawFullText как основной источник (сохраняет reading order)
+            val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
+            val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
+            val fullText = chooseBestText(rawText, boxedText)
+            
             val avgConf = if (cleanedWords.isNotEmpty()) {
                 cleanedWords.map { it.confidence / 100f }.average().toFloat()
             } else meanConf / 100f
@@ -203,7 +557,7 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
             val elapsed = System.currentTimeMillis() - startTime
 
-            return OcrResult(
+            val baseResult = OcrResult(
                 blocks = blocks,
                 fullText = fullText,
                 formattedText = fullText,
@@ -213,6 +567,8 @@ class TesseractEngine(private val context: Context) : OcrEngine {
                 imageWidth = bitmap.width,
                 imageHeight = bitmap.height
             )
+
+            return improveStructuredDocumentResult(api, safeBitmap, baseResult, startTime)
 
         } catch (e: Exception) {
             Log.e(TAG, "Recognition error", e)
@@ -240,6 +596,160 @@ class TesseractEngine(private val context: Context) : OcrEngine {
      * 3. Общее количество пикселей ≤ 6MP
      * 4. Максимальный апскейл ×3
      */
+    private fun improveStructuredDocumentResult(
+        api: TessBaseAPI,
+        bitmap: Bitmap,
+        baseResult: OcrResult,
+        startTime: Long
+    ): OcrResult {
+        if (!shouldTryStructuredDocumentPass(bitmap, baseResult.fullText)) {
+            return baseResult
+        }
+
+        val topCrop = cropRelative(bitmap, 0.08f, 0.04f, 0.88f, 0.18f)
+        val textCrop = cropRelative(bitmap, 0.34f, 0.13f, 0.62f, 0.78f)
+
+        return try {
+            val topText = recognizeTextVariant(
+                api = api,
+                bitmap = topCrop,
+                psm = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+            )
+            val textBlock = recognizeTextVariant(
+                api = api,
+                bitmap = textCrop,
+                psm = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+            )
+            val textSparse = recognizeTextVariant(
+                api = api,
+                bitmap = textCrop,
+                psm = TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
+            )
+
+            val bestTextArea = listOf(textBlock, textSparse)
+                .maxByOrNull { structuredDocumentScore(it) }
+                .orEmpty()
+            val candidateText = mergeStructuredTexts(topText, bestTextArea, baseResult.fullText)
+
+            val baseScore = structuredDocumentScore(baseResult.fullText)
+            val candidateScore = structuredDocumentScore(candidateText)
+
+            if (candidateText.isNotBlank() && candidateScore > baseScore + 4f) {
+                Log.d(TAG, "Structured document pass selected: base=$baseScore, candidate=$candidateScore")
+                baseResult.copy(
+                    fullText = candidateText,
+                    formattedText = candidateText,
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[structured]"
+                )
+            } else {
+                Log.d(TAG, "Structured document pass skipped: base=$baseScore, candidate=$candidateScore")
+                baseResult
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Structured document pass failed", e)
+            try {
+                api.clear()
+            } catch (_: Exception) {
+            }
+            baseResult
+        } finally {
+            if (topCrop !== bitmap && !topCrop.isRecycled) topCrop.recycle()
+            if (textCrop !== bitmap && !textCrop.isRecycled) textCrop.recycle()
+        }
+    }
+
+    private fun shouldTryStructuredDocumentPass(bitmap: Bitmap, text: String): Boolean {
+        if (isArmTranslationRuntime()) return false
+
+        val ratio = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
+        if (ratio !in 1.15f..2.35f) return false
+
+        val dateCount = Regex("""\d{2}[.\s]\d{2}[.\s]\d{4}""").findAll(text).count()
+        val fieldCount = Regex("""(?i)(?:^|\s)\d+[a-z]?[.)]?""").findAll(text).count()
+        val hasLatin = text.any { it in 'A'..'Z' || it in 'a'..'z' }
+        val hasCyrillic = text.any { it.code in 0x0400..0x04FF }
+
+        return dateCount >= 2 || fieldCount >= 3 || (dateCount >= 1 && hasLatin && hasCyrillic)
+    }
+
+    private fun isArmTranslationRuntime(): Boolean {
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir.orEmpty()
+        val isX86System = Build.SUPPORTED_ABIS.any { it == "x86_64" || it == "x86" }
+        val runsArmLibs = nativeLibDir.contains("arm64") || nativeLibDir.contains("arm")
+        return isX86System && runsArmLibs
+    }
+
+    private fun recognizeTextVariant(
+        api: TessBaseAPI,
+        bitmap: Bitmap,
+        psm: Int
+    ): String {
+        api.pageSegMode = psm
+        api.setVariable("preserve_interword_spaces", "1")
+        api.setVariable("textord_heavy_nr", "1")
+        api.setVariable("textord_min_xheight", "6")
+
+        api.setImage(bitmap)
+        val rawText = api.utF8Text.orEmpty()
+        api.clear()
+
+        return TextPostProcessor.normalizeTesseractText(rawText)
+    }
+
+    private fun cropRelative(
+        bitmap: Bitmap,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float
+    ): Bitmap {
+        val x = (bitmap.width * left).toInt().coerceIn(0, bitmap.width - 1)
+        val y = (bitmap.height * top).toInt().coerceIn(0, bitmap.height - 1)
+        val right = (bitmap.width * (left + width)).toInt().coerceIn(x + 1, bitmap.width)
+        val bottom = (bitmap.height * (top + height)).toInt().coerceIn(y + 1, bitmap.height)
+        return Bitmap.createBitmap(bitmap, x, y, right - x, bottom - y)
+    }
+
+    private fun mergeStructuredTexts(vararg texts: String): String {
+        val seen = linkedSetOf<String>()
+        val lines = mutableListOf<String>()
+
+        for (text in texts) {
+            text.lines()
+                .map { it.trim() }
+                .filter { it.length >= 2 }
+                .forEach { line ->
+                    val key = line
+                        .lowercase()
+                        .replace(Regex("""[^\p{L}\p{N}]+"""), "")
+                    if (key.length >= 2 && seen.add(key)) {
+                        lines += line
+                    }
+                }
+        }
+
+        return lines.joinToString("\n").trim()
+    }
+
+    private fun structuredDocumentScore(text: String): Float {
+        if (text.isBlank()) return 0f
+
+        val dateCount = Regex("""\d{2}[.\s]\d{2}[.\s]\d{4}""").findAll(text).count()
+        val fieldCount = Regex("""(?i)(?:^|\s)\d+[a-z]?[.)]?""").findAll(text).count()
+        val latinUpperWords = Regex("""\b[A-Z]{2,}\b""").findAll(text).count()
+        val cyrillicUpperWords = Regex("""\b[\u0400-\u04FF]{2,}\b""").findAll(text).count()
+        val lineCount = text.lines().count { it.isNotBlank() }
+        val garbageCount = text.count { it == '[' || it == ']' || it == '|' || it == '~' }
+
+        return dateCount * 8f +
+            fieldCount * 4f +
+            latinUpperWords.coerceAtMost(12) * 1.2f +
+            cyrillicUpperWords.coerceAtMost(12) * 1.2f +
+            lineCount.coerceAtMost(16) * 1.5f -
+            garbageCount * 2f
+    }
+
     private fun ensureOptimalSize(bitmap: Bitmap): Bitmap {
         val w = bitmap.width
         val h = bitmap.height

@@ -282,11 +282,39 @@ class ScanViewModel(
                     )
                 }
             } else {
-                val errorMsg = result.exceptionOrNull()?.message ?: "Unknown error"
+                val exception = result.exceptionOrNull()
+                val errorMsg = when (exception) {
+                    is com.arny.mlscanner.domain.models.errors.OcrError -> {
+                        // Детальное сообщение для OcrError
+                        buildString {
+                            append(exception.displayMessage.toString())
+                            exception.cause?.let { cause ->
+                                append("\n\nDetails:\n")
+                                append(cause.javaClass.simpleName)
+                                append(": ")
+                                append(cause.message ?: "No message")
+                                
+                                // Добавляем stacktrace для отладки
+                                val stackTrace = cause.stackTrace.take(5).joinToString("\n") { 
+                                    "  at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})"
+                                }
+                                if (stackTrace.isNotEmpty()) {
+                                    append("\n")
+                                    append(stackTrace)
+                                }
+                            }
+                        }
+                    }
+                    else -> exception?.message ?: "Unknown error"
+                }
+                
+                Log.e(TAG, "OCR failed: $errorMsg", exception)
+                
                 _uiState.update {
                     it.copy(
                         step = ScanStep.PREPROCESSING,
                         isScanning = false,
+                        processingProgress = 0f,
                         error = ScanError.OcrFailed(errorMsg)
                     )
                 }
@@ -299,11 +327,23 @@ class ScanViewModel(
             _uiState.update { it.copy(step = ScanStep.PREPROCESSING, isScanning = false) }
         } catch (e: Exception) {
             Log.e(TAG, "Scanning error", e)
+            
+            val detailedError = buildString {
+                append(e.javaClass.simpleName)
+                append(": ")
+                append(e.message ?: "No message")
+                append("\n\nStacktrace:\n")
+                append(e.stackTrace.take(10).joinToString("\n") { 
+                    "  at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})"
+                })
+            }
+            
             _uiState.update {
                 it.copy(
                     step = ScanStep.PREPROCESSING,
                     isScanning = false,
-                    error = ScanError.OcrFailed(e.message ?: "Unknown")
+                    processingProgress = 0f,
+                    error = ScanError.OcrFailed(detailedError)
                 )
             }
         }

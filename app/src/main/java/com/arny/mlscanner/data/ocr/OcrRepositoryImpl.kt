@@ -24,8 +24,7 @@ import kotlinx.coroutines.withContext
  * Управляет lifecycle OCR-движков и предобработкой.
  * Единственная точка доступа к OCR из domain слоя.
  *
- * ▶ FIX: Движки создаются ОДИН раз и переиспользуются
- *   (HybridEngine получает ссылки на те же MLKit и Tesseract)
+ * Доступные движки: ML Kit, Tesseract, Hybrid
  */
 class OcrRepositoryImpl(
     private val context: Context,
@@ -47,7 +46,7 @@ class OcrRepositoryImpl(
     private val initMutex = Mutex()
 
     /**
-     * Инициализация обоих движков параллельно.
+     * Инициализация всех движков параллельно.
      */
     override suspend fun initialize(): Map<String, Boolean> = withContext(Dispatchers.IO) {
         initMutex.withLock {
@@ -69,7 +68,7 @@ class OcrRepositoryImpl(
             )
 
             initialized = results.values.any { it }
-            Log.i(TAG, "Init: $results")
+            Log.i(TAG, "Init results: $results")
             results
         }
     }
@@ -82,7 +81,18 @@ class OcrRepositoryImpl(
             initialize()
         }
 
-        val processed = imagePreprocessor.prepareBaseImage(bitmap, settings)
+        // Multi-pass режим для Tesseract
+        if (settings.engineType == OcrEngineType.TESSERACT && settings.useMultiPass) {
+            return recognizeWithMultiPass(bitmap, settings)
+        }
+
+        // Preprocessing для разных движков
+        val processed = when (settings.engineType) {
+            OcrEngineType.TESSERACT -> imagePreprocessor.prepareForTesseract(bitmap, settings)
+            OcrEngineType.HYBRID -> imagePreprocessor.prepareForTesseract(bitmap, settings)
+            OcrEngineType.ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings)
+            OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")
+        }
 
         val engine: OcrEngine = when (settings.engineType) {
             OcrEngineType.ML_KIT -> mlkitEngine
@@ -99,6 +109,32 @@ class OcrRepositoryImpl(
         }
 
         return result
+    }
+
+    /**
+     * Multi-pass распознавание для Tesseract.
+     * Запускает несколько профилей и выбирает лучший результат.
+     */
+    private suspend fun recognizeWithMultiPass(
+        bitmap: Bitmap,
+        settings: ScanSettings
+    ): OcrResult {
+        val profiles = when (settings.language) {
+            com.arny.mlscanner.domain.models.OcrLanguage.RUSSIAN -> 
+                com.arny.mlscanner.data.ocr.engine.TesseractProfile.RUSSIAN_PROFILES
+            com.arny.mlscanner.domain.models.OcrLanguage.ENGLISH -> 
+                com.arny.mlscanner.data.ocr.engine.TesseractProfile.ENGLISH_PROFILES
+            com.arny.mlscanner.domain.models.OcrLanguage.RUSSIAN_ENGLISH -> 
+                com.arny.mlscanner.data.ocr.engine.TesseractProfile.MIXED_PROFILES
+        }
+
+        // Не делаем preprocessing здесь — каждый профиль применит свой
+        val bestCandidate = tesseractEngine.recognizeMultiPass(bitmap, profiles)
+
+        Log.d(TAG, "Multi-pass completed: profile='${bestCandidate.profile.name}', " +
+                "score=${bestCandidate.score}, conf=${bestCandidate.confidence}")
+
+        return bestCandidate.result
     }
 
     /**

@@ -81,6 +81,25 @@ class ImagePreprocessor {
         return applyOcrFilters(source)
     }
 
+/**
+     * Preprocessing для Tesseract.
+     * 
+     * Tesseract хорошо работает с:
+     * - Grayscale
+     * - Инверсией тёмного фона
+     * - Агрессивным контрастом
+     * - Adaptive threshold
+     */
+    fun prepareForTesseract(bitmap: Bitmap, settings: ScanSettings): Bitmap {
+        if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
+        if (!openCvInitialized) return bitmap
+
+        val source = if (bitmap.isMutable) bitmap
+        else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+
+        return applyOcrFilters(source)
+    }
+
     /**
      * Фильтры для LIVE PREVIEW.
      *
@@ -271,7 +290,8 @@ class ImagePreprocessor {
 
             if (needsInversion) {
                 Log.d(TAG, "OCR: dark bg (mean=${"%.0f".format(mean)}), inverting")
-                Core.bitwise_not(mat, mat)  // Инвертируем ЦВЕТНОЙ mat
+                Core.bitwise_not(gray, gray)
+                Imgproc.cvtColor(gray, mat, Imgproc.COLOR_GRAY2RGBA)
             }
 
             // Возвращаем ЦВЕТНОЙ bitmap — Tesseract сам сделает grayscale

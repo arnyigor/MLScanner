@@ -72,6 +72,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
         // Читаем ключ из корневого local.properties
         val localProperties = Properties()
         // rootProject.file(...) - это важно, ищет файл в корне проекта, а не модуля
@@ -145,10 +149,15 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+        prefab = true  // Enable prefab for native dependencies
     }
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -159,6 +168,10 @@ android {
             excludes += listOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/license.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/notice.txt", "META-INF/ASL2.0")
         }
     }
+
+    ndkVersion = "25.2.9519653"
+    
+    // Дополнительные настройки для NDK 25
 }
 
 room {
