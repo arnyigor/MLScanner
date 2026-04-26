@@ -10,6 +10,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.util.Log
 import androidx.core.graphics.createBitmap
+import com.arny.mlscanner.data.ocr.preprocessing.MoireRemovalPreprocessor
 import com.arny.mlscanner.domain.models.ScanSettings
 import org.opencv.android.Utils
 import org.opencv.core.Core
@@ -62,7 +63,7 @@ class ImagePreprocessor {
     // ================================================================
 
     /**
-     * Полный pipeline для OCR: deskew + grayscale + фильтры.
+     * Полный pipeline для OCR: moire removal + deskew + grayscale + фильтры.
      * Результат — оптимизированный для Tesseract (grayscale).
      * НЕ используется для preview!
      */
@@ -73,12 +74,15 @@ class ImagePreprocessor {
         val source = if (bitmap.isMutable) bitmap
         else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
+        // 1. Удаляем муар если обнаружен (для фото экранов)
+        val demoired = MoireRemovalPreprocessor.processIfNeeded(source)
+
         // Deskew ОТКЛЮЧЁН:
         // HoughLines часто детектирует ложные линии (рамки таблиц, границы фото)
         // и поворачивает изображение на неправильный угол → Tesseract не может прочитать.
         // Tesseract 4 LSTM сам умеет компенсировать небольшой наклон.
 
-        return applyOcrFilters(source)
+        return applyOcrFilters(demoired)
     }
 
 /**
@@ -97,7 +101,8 @@ class ImagePreprocessor {
         val source = if (bitmap.isMutable) bitmap
         else bitmap.copy(Bitmap.Config.ARGB_8888, true)
 
-        return applyOcrFilters(source)
+        val demoired = MoireRemovalPreprocessor.processIfNeeded(source)
+        return applyOcrFilters(demoired)
     }
 
     /**

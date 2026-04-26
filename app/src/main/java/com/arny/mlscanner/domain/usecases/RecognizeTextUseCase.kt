@@ -68,12 +68,18 @@ class RecognizeTextUseCase(
 
             Log.d(TAG, "OCR completed: ${ocrResult.summary()}")
 
-            if (ocrResult.isEmpty) {
+            if (ocrResult.engineName.contains("TIMEOUT", ignoreCase = true)) {
+                Result.failure(OcrError.Timeout(ocrResult.processingTimeMs))
+            } else if (ocrResult.isEmpty) {
                 Result.failure(OcrError.NoTextFound)
             } else {
                 val recognized = resultMapper.toRecognizedText(ocrResult)
                 Result.success(recognized)
             }
+
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Log.e(TAG, "OCR timeout after ${timeoutMs}ms", e)
+            Result.failure(OcrError.Timeout(timeoutMs))
 
         } catch (e: CancellationException) {
             // НЕ ловим — позволяем корутине отмениться корректно
@@ -82,10 +88,6 @@ class RecognizeTextUseCase(
         } catch (e: OcrError) {
             Log.e(TAG, "OCR error: ${e.displayMessage}", e)
             Result.failure(e)
-
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.e(TAG, "OCR timeout after ${timeoutMs}ms", e)
-            Result.failure(OcrError.Timeout(timeoutMs))
 
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected OCR error", e)

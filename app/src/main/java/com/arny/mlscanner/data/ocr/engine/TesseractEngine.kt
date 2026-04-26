@@ -14,11 +14,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import java.io.File
 import java.io.FileOutputStream
 import androidx.core.graphics.scale
 import androidx.core.graphics.createBitmap
 import com.arny.mlscanner.data.ocr.postprocessing.TextPostProcessor
+import com.arny.mlscanner.data.ocr.postprocessing.RussianPostProcessor
+import com.arny.mlscanner.data.ocr.preprocessing.ShadowRemovalPreprocessor
+import org.opencv.android.Utils
+import org.opencv.core.Core
+import org.opencv.core.Mat
+import org.opencv.core.Size
+import org.opencv.imgproc.Imgproc
 
 class TesseractEngine(private val context: Context) : OcrEngine {
 
@@ -31,6 +40,8 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
         private val GARBAGE_PATTERN = Regex("[|\\[\\]{}~`^\\\\]{2,}")
         private const val MIN_WORD_CONFIDENCE = 15f
+
+        private const val OCR_TIMEOUT_MS = 30000L  // 30 секунд таймаут
 
         private const val MAX_SIDE = 3000           // Даунскейл выше этого
         private const val MAX_PIXELS = 8_000_000L   // 8MP макс (увеличен для апскейла)
@@ -182,8 +193,32 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         handwrittenMode: Boolean
     ): OcrResult = mutex.withLock {
         withContext(Dispatchers.Default) {
-            recognizeInternal(bitmap, handwrittenMode)
+            try {
+                withTimeout(OCR_TIMEOUT_MS) {
+                    recognizeInternal(bitmap, handwrittenMode)
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "OCR timeout after ${OCR_TIMEOUT_MS}ms")
+                OcrResult.EMPTY.copy(
+                    processingTimeMs = OCR_TIMEOUT_MS,
+                    engineName = "$name[TIMEOUT]"
+                )
+            }
         }
+    }
+
+    /**
+     * Распознавание с автоматическим выбором профилей.
+     * 
+     * Анализирует изображение и выбирает оптимальные профили,
+     * затем запускает multi-pass распознавание.
+     */
+    suspend fun recognizeAdaptive(
+        bitmap: Bitmap,
+        language: TesseractLanguage = TesseractLanguage.RUS_ONLY
+    ): OcrCandidate = withContext(Dispatchers.Default) {
+        val profiles = AdaptiveProfileSelector.selectProfiles(bitmap, language)
+        recognizeMultiPass(bitmap, profiles)
     }
 
     /**
@@ -226,118 +261,146 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         profile: TesseractProfile
     ): OcrResult = mutex.withLock {
         withContext(Dispatchers.Default) {
-            val api = tessApi
-            if (api == null || !ready) {
-                Log.w(TAG, "Tesseract not ready")
-                return@withContext OcrResult.EMPTY
+            try {
+                withTimeout(OCR_TIMEOUT_MS) {
+                    recognizeWithProfileInternal(bitmap, profile)
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "OCR timeout for profile ${profile.name} after ${OCR_TIMEOUT_MS}ms")
+                OcrResult.EMPTY.copy(
+                    processingTimeMs = OCR_TIMEOUT_MS,
+                    engineName = "$name[${profile.name}:TIMEOUT]"
+                )
+            }
+        }
+    }
+
+    private fun recognizeWithProfileInternal(
+        bitmap: Bitmap,
+        profile: TesseractProfile
+    ): OcrResult {
+        val api = tessApi
+        if (api == null || !ready) {
+            Log.w(TAG, "Tesseract not ready")
+            return OcrResult.EMPTY
+        }
+
+        val startTime = System.currentTimeMillis()
+        
+        // Применяем preprocessing согласно профилю
+        val preprocessed = applyPreprocessing(bitmap, profile.preprocessMode)
+        val optimized = ensureOptimalSize(preprocessed)
+        val safeBitmap = ensureSafeBitmap(optimized)
+
+        try {
+            // Устанавливаем язык
+            if (api.init(context.filesDir.absolutePath, profile.language.code)) {
+                api.pageSegMode = profile.psm
+                api.setVariable("preserve_interword_spaces", "1")
+                api.setVariable("textord_heavy_nr", "1")
+                api.setVariable("textord_min_xheight", "6")
             }
 
-            val startTime = System.currentTimeMillis()
-            
-            // Применяем preprocessing согласно профилю
-            val preprocessed = applyPreprocessing(bitmap, profile.preprocessMode)
-            val optimized = ensureOptimalSize(preprocessed)
-            val safeBitmap = ensureSafeBitmap(optimized)
-
             try {
-                // Устанавливаем язык
-                if (api.init(context.filesDir.absolutePath, profile.language.code)) {
-                    api.pageSegMode = profile.psm
-                    api.setVariable("preserve_interword_spaces", "1")
-                    api.setVariable("textord_heavy_nr", "1")
-                    api.setVariable("textord_min_xheight", "6")
-                }
-
-                try {
-                    api.setImage(safeBitmap)
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.e(TAG, "Native crash in setImage, profile ${profile.name}", e)
-                    api.clear()
-                    return@withContext OcrResult.EMPTY.copy(
-                        processingTimeMs = System.currentTimeMillis() - startTime,
-                        engineName = "$name[${profile.name}:CRASHED]"
-                    )
-                } catch (e: Error) {
-                    Log.e(TAG, "Fatal error in setImage, profile ${profile.name}", e)
-                    api.clear()
-                    return@withContext OcrResult.EMPTY.copy(
-                        processingTimeMs = System.currentTimeMillis() - startTime,
-                        engineName = "$name[${profile.name}:ERROR]"
-                    )
-                }
-
-                val rawFullText = try {
-                    api.utF8Text.orEmpty()
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.e(TAG, "Native crash in utF8Text, profile ${profile.name}", e)
-                    api.clear()
-                    return@withContext OcrResult.EMPTY.copy(
-                        processingTimeMs = System.currentTimeMillis() - startTime,
-                        engineName = "$name[${profile.name}:CRASHED]"
-                    )
-                } catch (e: Error) {
-                    Log.e(TAG, "Fatal error in utF8Text, profile ${profile.name}", e)
-                    api.clear()
-                    return@withContext OcrResult.EMPTY.copy(
-                        processingTimeMs = System.currentTimeMillis() - startTime,
-                        engineName = "$name[${profile.name}:ERROR]"
-                    )
-                }
-
-                if (rawFullText.isBlank()) {
-                    api.clear()
-                    return@withContext OcrResult.EMPTY.copy(
-                        processingTimeMs = System.currentTimeMillis() - startTime,
-                        engineName = "$name[${profile.name}]"
-                    )
-                }
-
-                val meanConf = api.meanConfidence()
-                val rawWords = extractWords(api)
+                api.setImage(safeBitmap)
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Native crash in setImage, profile ${profile.name}", e)
                 api.clear()
-
-                val cleanedWords = postProcessWords(rawWords)
-                val blocks = buildBlocksFromWords(cleanedWords)
-                
-                // Используем rawFullText как основной источник (сохраняет reading order)
-                val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
-                val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
-                val fullText = chooseBestText(rawText, boxedText)
-                
-                val avgConf = if (cleanedWords.isNotEmpty()) {
-                    cleanedWords.map { it.confidence / 100f }.average().toFloat()
-                } else meanConf / 100f
-
-                val elapsed = System.currentTimeMillis() - startTime
-
-                return@withContext OcrResult(
-                    blocks = blocks,
-                    fullText = fullText,
-                    formattedText = fullText,
-                    averageConfidence = avgConf,
-                    processingTimeMs = elapsed,
-                    engineName = "$name[${profile.name}]",
-                    imageWidth = bitmap.width,
-                    imageHeight = bitmap.height
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[${profile.name}:CRASHED]"
                 )
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Recognition error with profile ${profile.name}", e)
+            } catch (e: Error) {
+                Log.e(TAG, "Fatal error in setImage, profile ${profile.name}", e)
                 api.clear()
-                return@withContext OcrResult.EMPTY.copy(
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[${profile.name}:ERROR]"
+                )
+            }
+
+            val rawFullText = try {
+                api.utF8Text.orEmpty()
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Native crash in utF8Text, profile ${profile.name}", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[${profile.name}:CRASHED]"
+                )
+            } catch (e: Error) {
+                Log.e(TAG, "Fatal error in utF8Text, profile ${profile.name}", e)
+                api.clear()
+                return OcrResult.EMPTY.copy(
+                    processingTimeMs = System.currentTimeMillis() - startTime,
+                    engineName = "$name[${profile.name}:ERROR]"
+                )
+            }
+
+            if (rawFullText.isBlank()) {
+                api.clear()
+                return OcrResult.EMPTY.copy(
                     processingTimeMs = System.currentTimeMillis() - startTime,
                     engineName = "$name[${profile.name}]"
                 )
-            } finally {
-                if (safeBitmap !== bitmap && safeBitmap !== optimized && safeBitmap !== preprocessed) {
-                    safeBitmap.recycle()
-                }
-                if (optimized !== bitmap && optimized !== preprocessed) {
-                    optimized.recycle()
-                }
-                if (preprocessed !== bitmap) {
-                    preprocessed.recycle()
-                }
+            }
+
+            val meanConf = api.meanConfidence()
+            val rawWords = extractWords(api)
+            api.clear()
+
+            val cleanedWords = postProcessWords(rawWords)
+            val blocks = buildBlocksFromWords(cleanedWords)
+            
+            // Используем rawFullText как основной источник (сохраняет reading order)
+            val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
+            val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
+            val fullText = chooseBestText(rawText, boxedText)
+            
+            // Применяем постобработку для русского текста
+            val postProcessedText = if (profile.language == TesseractLanguage.RUS_ONLY || 
+                                       profile.language == TesseractLanguage.RUS_ENG) {
+                val processed = RussianPostProcessor.process(fullText)
+                val metrics = RussianPostProcessor.analyzeQuality(fullText, processed)
+                Log.d(TAG, "Russian post-processing: $metrics")
+                processed
+            } else {
+                fullText
+            }
+            
+            val avgConf = if (cleanedWords.isNotEmpty()) {
+                cleanedWords.map { it.confidence / 100f }.average().toFloat()
+            } else meanConf / 100f
+
+            val elapsed = System.currentTimeMillis() - startTime
+
+            return OcrResult(
+                blocks = blocks,
+                fullText = postProcessedText,
+                formattedText = postProcessedText,
+                averageConfidence = avgConf,
+                processingTimeMs = elapsed,
+                engineName = "$name[${profile.name}]",
+                imageWidth = bitmap.width,
+                imageHeight = bitmap.height
+            )
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Recognition error with profile ${profile.name}", e)
+            api.clear()
+            return OcrResult.EMPTY.copy(
+                processingTimeMs = System.currentTimeMillis() - startTime,
+                engineName = "$name[${profile.name}]"
+            )
+        } finally {
+            if (safeBitmap !== bitmap && safeBitmap !== optimized && safeBitmap !== preprocessed) {
+                safeBitmap.recycle()
+            }
+            if (optimized !== bitmap && optimized !== preprocessed) {
+                optimized.recycle()
+            }
+            if (preprocessed !== bitmap) {
+                preprocessed.recycle()
             }
         }
     }
@@ -434,38 +497,82 @@ class TesseractEngine(private val context: Context) : OcrEngine {
     private fun applyPreprocessing(bitmap: Bitmap, mode: PreprocessMode): Bitmap {
         return when (mode) {
             PreprocessMode.ORIGINAL -> bitmap
-            PreprocessMode.CONTRAST_ENHANCED -> applyContrastEnhancement(bitmap)
+            PreprocessMode.CONTRAST_ENHANCED -> {
+                // Проверяем, нужна ли сложная предобработка
+                if (ShadowRemovalPreprocessor.needsComplexPreprocessing(bitmap)) {
+                    ShadowRemovalPreprocessor.preprocessComplex(bitmap)
+                } else {
+                    ShadowRemovalPreprocessor.preprocessSimple(bitmap)
+                }
+            }
             PreprocessMode.ADAPTIVE_THRESHOLD -> applyAdaptiveThreshold(bitmap)
             PreprocessMode.UPSCALE_2X -> bitmap.scale(bitmap.width * 2, bitmap.height * 2)
-            PreprocessMode.SHARPEN_LIGHT -> applySharpen(bitmap, 0.5f)
+            PreprocessMode.SHARPEN_LIGHT -> applySharpen(bitmap, 0.5)
         }
     }
 
-    private fun applyContrastEnhancement(bitmap: Bitmap): Bitmap {
-        // Простое усиление контраста через ColorMatrix
-        val result = createBitmap(bitmap.width, bitmap.height)
-        val canvas = android.graphics.Canvas(result)
-        val paint = android.graphics.Paint()
-        
-        val cm = android.graphics.ColorMatrix(floatArrayOf(
-            1.5f, 0f, 0f, 0f, -64f,
-            0f, 1.5f, 0f, 0f, -64f,
-            0f, 0f, 1.5f, 0f, -64f,
-            0f, 0f, 0f, 1f, 0f
-        ))
-        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
-        canvas.drawBitmap(bitmap, 0f, 0f, paint)
-        return result
-    }
-
     private fun applyAdaptiveThreshold(bitmap: Bitmap): Bitmap {
-        // Заглушка - требует OpenCV, пока возвращаем оригинал
-        return bitmap
+        return try {
+            val src = Mat()
+            Utils.bitmapToMat(bitmap, src)
+
+            val gray = Mat()
+            Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
+
+            // Adaptive threshold для работы с тенями
+            val result = Mat()
+            Imgproc.adaptiveThreshold(
+                gray,
+                result,
+                255.0,
+                Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                Imgproc.THRESH_BINARY,
+                31,
+                11.0
+            )
+
+            val output = Bitmap.createBitmap(result.cols(), result.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(result, output)
+
+            src.release()
+            gray.release()
+            result.release()
+
+            output
+        } catch (e: Exception) {
+            Log.w(TAG, "Adaptive threshold failed, using original", e)
+            bitmap
+        }
     }
 
-    private fun applySharpen(bitmap: Bitmap, level: Float): Bitmap {
-        // Заглушка - требует OpenCV, пока возвращаем оригинал
-        return bitmap
+    private fun applySharpen(bitmap: Bitmap, level: Double): Bitmap {
+        return try {
+            val src = Mat()
+            Utils.bitmapToMat(bitmap, src)
+
+            val gray = Mat()
+            Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
+
+            // Лёгкая резкость через Gaussian blur и weighted add
+            val blurred = Mat()
+            Imgproc.GaussianBlur(gray, blurred, Size(0.0, 0.0), 3.0)
+
+            val sharpened = Mat()
+            Core.addWeighted(gray, 1.0 + level, blurred, -level, 0.0, sharpened)
+
+            val output = Bitmap.createBitmap(sharpened.cols(), sharpened.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(sharpened, output)
+
+            src.release()
+            gray.release()
+            blurred.release()
+            sharpened.release()
+
+            output
+        } catch (e: Exception) {
+            Log.w(TAG, "Sharpen failed, using original", e)
+            bitmap
+        }
     }
 
     private fun recognizeInternal(
@@ -548,6 +655,11 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
             val fullText = chooseBestText(rawText, boxedText)
             
+            // Применяем постобработку для русского текста
+            val postProcessedText = RussianPostProcessor.process(fullText)
+            val metrics = RussianPostProcessor.analyzeQuality(fullText, postProcessedText)
+            Log.d(TAG, "Russian post-processing: $metrics")
+            
             val avgConf = if (cleanedWords.isNotEmpty()) {
                 cleanedWords.map { it.confidence / 100f }.average().toFloat()
             } else meanConf / 100f
@@ -559,8 +671,8 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
             val baseResult = OcrResult(
                 blocks = blocks,
-                fullText = fullText,
-                formattedText = fullText,
+                fullText = postProcessedText,
+                formattedText = postProcessedText,
                 averageConfidence = avgConf,
                 processingTimeMs = elapsed,
                 engineName = name,

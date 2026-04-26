@@ -49,8 +49,15 @@ sealed class ScanError(val message: String) {
  */
 sealed interface ScanUiEvent {
     data class ShowToast(val message: String) : ScanUiEvent
+    data class ShowError(val message: String) : ScanUiEvent
     data class ShareText(val text: String) : ScanUiEvent
     data object CopiedToClipboard : ScanUiEvent
+    data class CopyToClipboard(val text: String) : ScanUiEvent
     data class NavigateTo(val step: ScanStep) : ScanUiEvent
     data object NavigateBack : ScanUiEvent
+    
+    // Новые события для паттернов
+    data class CallPhone(val phoneNumber: String) : ScanUiEvent
+    data class SendEmail(val email: String) : ScanUiEvent
+    data class OpenUrl(val url: String) : ScanUiEvent
 }

@@ -110,6 +110,11 @@ fun AppNavigation(
                 is ScanUiEvent.ShowToast -> {
                     Toast.makeText(context, event.message, Toast.LENGTH_SHORT).show()
                 }
+                is ScanUiEvent.ShowError -> {
+                    Toast.makeText(context, event.message, Toast.LENGTH_LONG).show()
+                    navigateToPreprocessing(navController)
+                    viewModel.onErrorDismissed()
+                }
                 is ScanUiEvent.CopiedToClipboard -> {
                     val text = uiState.recognizedText?.formattedText
                         ?: return@collectLatest
@@ -130,7 +135,42 @@ fun AppNavigation(
                         Intent.createChooser(intent, "Share via")
                     )
                 }
-                is ScanUiEvent.NavigateTo -> {}
+                is ScanUiEvent.CopyToClipboard -> {
+                    copyToClipboard(context, event.text)
+                    Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+                }
+                is ScanUiEvent.CallPhone -> {
+                    val intent = Intent(
+                        Intent.ACTION_DIAL,
+                        Uri.parse("tel:${Uri.encode(event.phoneNumber)}")
+                    )
+                    startActivitySafely(context, intent)
+                }
+                is ScanUiEvent.SendEmail -> {
+                    val intent = Intent(
+                        Intent.ACTION_SENDTO,
+                        Uri.parse("mailto:${Uri.encode(event.email)}")
+                    )
+                    startActivitySafely(context, intent)
+                }
+                is ScanUiEvent.OpenUrl -> {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(event.url))
+                    startActivitySafely(context, intent)
+                }
+                is ScanUiEvent.NavigateTo -> {
+                    when (event.step) {
+                        ScanStep.PREPROCESSING -> navigateToPreprocessing(navController)
+                        ScanStep.SCANNING -> navController.navigate(Screen.Scanning.route) {
+                            launchSingleTop = true
+                        }
+                        ScanStep.RESULT -> navController.navigate(Screen.Result.route) {
+                            launchSingleTop = true
+                        }
+                        ScanStep.CAMERA -> navController.navigate(Screen.Camera.route) {
+                            launchSingleTop = true
+                        }
+                    }
+                }
                 is ScanUiEvent.NavigateBack -> navController.popBackStack()
             }
         }
@@ -140,6 +180,7 @@ fun AppNavigation(
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             Toast.makeText(context, error.message, Toast.LENGTH_LONG).show()
+            navigateToPreprocessing(navController)
             viewModel.onErrorDismissed()
         }
     }
@@ -217,9 +258,10 @@ fun AppNavigation(
                             popUpTo(0) { inclusive = true }
                         }
                     },
-                    onCopy = { viewModel.onCopyText() },
-                    onShare = { viewModel.onShareText() },
-                    onTextEdited = { viewModel.onTextEdited(it) }
+                    onTextEdited = { viewModel.onTextEdited(it) },
+                    onApplyTextChanges = { viewModel.onApplyTextChanges(it) },
+                    onToggleFormatMode = { viewModel.onToggleFormatMode() },
+                    onPatternClick = { viewModel.onPatternClick(it) }
                 )
             }
         }
@@ -237,6 +279,31 @@ fun AppNavigation(
 }
 
 // ═══ Утилиты ═══
+
+private fun navigateToPreprocessing(navController: NavHostController) {
+    val currentRoute = navController.currentDestination?.route
+    if (currentRoute == Screen.Preprocessing.route) return
+
+    navController.navigate(Screen.Preprocessing.route) {
+        if (currentRoute == Screen.Scanning.route) {
+            popUpTo(Screen.Scanning.route) { inclusive = true }
+        }
+        launchSingleTop = true
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("OCR", text))
+}
+
+private fun startActivitySafely(context: Context, intent: Intent) {
+    runCatching {
+        context.startActivity(intent)
+    }.onFailure {
+        Toast.makeText(context, "No app found for this action", Toast.LENGTH_SHORT).show()
+    }
+}
 
 private suspend fun loadBitmapFromUri(
     context: Context,

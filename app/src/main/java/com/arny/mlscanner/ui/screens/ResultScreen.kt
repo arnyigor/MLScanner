@@ -26,22 +26,25 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,11 +56,15 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
+import com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer
+import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter
 import com.arny.mlscanner.domain.models.RecognizedText
 
 @Preview(showBackground = true)
@@ -88,11 +95,21 @@ fun ResultScreen(
     onNewScan: () -> Unit,
     onCopy: () -> Unit = {},
     onShare: () -> Unit = {},
-    onTextEdited: (String) -> Unit = {}
+    onTextEdited: (String) -> Unit = {},
+    onApplyTextChanges: (String) -> Unit = {},
+    onToggleFormatMode: () -> Unit = {},
+    onPatternClick: (TextFormatter.ClickAction) -> Unit = {}
 ) {
     val context = LocalContext.current
     var editableText by remember { mutableStateOf(recognizedText.formattedText) }
-    var showOriginal by remember { mutableStateOf(false) }
+    val modes = listOf(
+        TextFormatter.FormatMode.RAW to "Raw",
+        TextFormatter.FormatMode.MARKDOWN to "Markdown"
+    )
+
+    LaunchedEffect(recognizedText.formattedText, recognizedText.formatMode) {
+        editableText = recognizedText.formattedText
+    }
 
     Scaffold(
         topBar = {
@@ -117,33 +134,6 @@ fun ResultScreen(
                     }) {
                         Icon(Icons.Default.Share, "Share")
                     }
-
-                    var expanded by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { expanded = true }) {
-                            Icon(Icons.Default.MoreVert, "More")
-                        }
-                        DropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(if (showOriginal) "Show formatted" else "Show original") },
-                                onClick = {
-                                    showOriginal = !showOriginal
-                                    editableText = if (showOriginal) {
-                                        recognizedText.originalText
-                                    } else {
-                                        recognizedText.formattedText
-                                    }
-                                    expanded = false
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.SwapHoriz, null)
-                                }
-                            )
-                        }
-                    }
                 }
             )
         },
@@ -159,6 +149,7 @@ fun ResultScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
         ) {
             StatsCard(
                 confidence = recognizedText.confidence,
@@ -186,27 +177,131 @@ fun ResultScreen(
                 }
             }
 
-            OutlinedTextField(
-                value = editableText,
-                onValueChange = {
-                    editableText = it
-                    onTextEdited(it)
-                },
+            SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState()),
-                textStyle = TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp
-                ),
-                label = { Text("Recognized Text") },
-                placeholder = { Text("No text recognized") }
-            )
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                modes.forEachIndexed { index, (mode, label) ->
+                    SegmentedButton(
+                        selected = recognizedText.formatMode == mode,
+                        onClick = {
+                            if (recognizedText.formatMode != mode) {
+                                onToggleFormatMode()
+                            }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = modes.size
+                        )
+                    ) {
+                        Text(label)
+                    }
+                }
+            }
+
+            val clickableElements = recognizedText.clickableElements
+            if (clickableElements.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "Detected",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    clickableElements.take(6).forEach { element ->
+                        TextButton(
+                            onClick = { onPatternClick(element.action) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "${patternLabel(element.type)}: ${element.displayText}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
+
+            // Текстовое поле или Markdown рендер
+            if (recognizedText.formatMode == TextFormatter.FormatMode.RAW) {
+                OutlinedTextField(
+                    value = editableText,
+                    onValueChange = {
+                        editableText = it
+                        onTextEdited(it)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp)
+                        .padding(horizontal = 16.dp),
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp
+                    ),
+                    label = { Text("Raw Text (editable)") },
+                    placeholder = { Text("No text recognized") },
+                    trailingIcon = {
+                        IconButton(onClick = { onApplyTextChanges(editableText) }) {
+                            Icon(Icons.Default.Refresh, "Refresh detected")
+                        }
+                    },
+                    minLines = 8,
+                    maxLines = 18
+                )
+            } else {
+                // Markdown режим - показываем форматированный текст
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = "Markdown (read-only)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        SelectionContainer {
+                            Text(
+                                text = editableText,
+                                style = TextStyle(
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 16.sp,
+                                    lineHeight = 24.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
 
             Spacer(Modifier.height(80.dp))
         }
+    }
+}
+
+private fun patternLabel(type: PatternRecognizer.PatternType): String {
+    return when (type) {
+        PatternRecognizer.PatternType.PHONE -> "Phone"
+        PatternRecognizer.PatternType.EMAIL -> "Email"
+        PatternRecognizer.PatternType.URL -> "URL"
+        PatternRecognizer.PatternType.DATE -> "Date"
+        PatternRecognizer.PatternType.TIME -> "Time"
+        PatternRecognizer.PatternType.MONEY -> "Money"
+        PatternRecognizer.PatternType.INN -> "INN"
+        PatternRecognizer.PatternType.CARD -> "Card"
     }
 }
 

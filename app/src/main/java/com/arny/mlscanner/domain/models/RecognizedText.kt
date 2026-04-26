@@ -4,6 +4,9 @@
 // ============================================================
 package com.arny.mlscanner.domain.models
 
+import com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer
+import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter
+
 /**
  * Результат распознавания для UI слоя.
  *
@@ -15,13 +18,17 @@ package com.arny.mlscanner.domain.models
  * @property blocks         Блоки для визуализации
  * @property confidence     Средняя уверенность 0.0–1.0
  * @property detectedLanguage Определённый язык (для отображения)
+ * @property recognizedPatterns Распознанные паттерны (телефоны, ссылки и т.д.)
+ * @property formatMode     Режим форматирования (RAW/MARKDOWN)
  */
 data class RecognizedText(
     val originalText: String,
     val formattedText: String,
     val blocks: List<TextBlockInfo>,
     val confidence: Float,
-    val detectedLanguage: String
+    val detectedLanguage: String,
+    val recognizedPatterns: List<PatternRecognizer.RecognizedPattern> = emptyList(),
+    val formatMode: TextFormatter.FormatMode = TextFormatter.FormatMode.RAW
 ) {
     /** Пустой результат */
     val isEmpty: Boolean get() = formattedText.isBlank()
@@ -30,6 +37,47 @@ data class RecognizedText(
     val wordCount: Int
         get() = formattedText.split("\\s+".toRegex())
             .count { it.isNotBlank() }
+    
+    /** Получить кликабельные элементы */
+    val clickableElements: List<TextFormatter.ClickableElement>
+        get() = TextFormatter.createClickableElements(recognizedPatterns)
+    
+    /** Переключить режим форматирования */
+    fun toggleFormatMode(): RecognizedText {
+        val newMode = when (formatMode) {
+            TextFormatter.FormatMode.RAW -> TextFormatter.FormatMode.MARKDOWN
+            TextFormatter.FormatMode.MARKDOWN -> TextFormatter.FormatMode.RAW
+        }
+        
+        val formatted = TextFormatter.format(originalText, newMode)
+        
+        return copy(
+            formattedText = formatted.text,
+            recognizedPatterns = formatted.patterns,
+            formatMode = newMode
+        )
+    }
+    
+    /** Обновить сырой текст без тяжёлого пересчёта на каждый символ. */
+    fun updateRawText(newText: String): RecognizedText {
+        return copy(
+            originalText = newText,
+            formattedText = newText,
+            formatMode = TextFormatter.FormatMode.RAW
+        )
+    }
+
+    /** Применить сырой текст и пересчитать форматированный вывод/паттерны. */
+    fun applyRawText(newText: String): RecognizedText {
+        val formatted = TextFormatter.format(newText, formatMode)
+
+        return copy(
+            originalText = newText,
+            formattedText = formatted.text,
+            recognizedPatterns = formatted.patterns,
+            formatMode = formatted.mode
+        )
+    }
 
     companion object {
         val EMPTY = RecognizedText(
@@ -37,7 +85,9 @@ data class RecognizedText(
             formattedText = "",
             blocks = emptyList(),
             confidence = 0f,
-            detectedLanguage = "unknown"
+            detectedLanguage = "unknown",
+            recognizedPatterns = emptyList(),
+            formatMode = TextFormatter.FormatMode.RAW
         )
     }
 }

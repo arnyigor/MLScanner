@@ -4,10 +4,10 @@
 // ============================================================
 package com.arny.mlscanner.domain.mappers
 
-import com.arny.mlscanner.domain.formatters.TextFormatter
+import com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer
+import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter as DisplayTextFormatter
+import com.arny.mlscanner.domain.formatters.TextFormatter as BlockTextFormatter
 import com.arny.mlscanner.domain.models.BoundingBox
-import com.arny.mlscanner.domain.models.LanguageDetector
-import com.arny.mlscanner.domain.models.OcrLanguage
 import com.arny.mlscanner.domain.models.OcrResult
 import com.arny.mlscanner.domain.models.RecognizedText
 import com.arny.mlscanner.domain.models.TextBlock
@@ -22,7 +22,7 @@ import com.arny.mlscanner.domain.models.LineInfo
  * - Raw engine output → OcrResult (domain)
  */
 class OcrResultMapper(
-    private val textFormatter: TextFormatter = TextFormatter()
+    private val textFormatter: BlockTextFormatter = BlockTextFormatter()
 ) {
 
     /**
@@ -31,7 +31,11 @@ class OcrResultMapper(
      * Применяет форматирование текста и определяет язык.
      */
     fun toRecognizedText(ocrResult: OcrResult): RecognizedText {
-        val formattedText = textFormatter.format(ocrResult.fullText)
+        val formatted = DisplayTextFormatter.format(
+            ocrResult.fullText,
+            DisplayTextFormatter.FormatMode.RAW
+        )
+        val patterns = PatternRecognizer.recognizeAll(ocrResult.fullText)
 
         val blockInfos = ocrResult.blocks.map { block ->
             TextBlockInfo(
@@ -50,10 +54,12 @@ class OcrResultMapper(
 
         return RecognizedText(
             originalText = ocrResult.fullText,
-            formattedText = formattedText,
+            formattedText = formatted.text,
             blocks = blockInfos,
             confidence = ocrResult.averageConfidence,
-            detectedLanguage = ocrResult.detectedLanguage
+            detectedLanguage = ocrResult.detectedLanguage,
+            recognizedPatterns = patterns,
+            formatMode = formatted.mode
         )
     }
 
