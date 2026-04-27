@@ -3,6 +3,7 @@ package com.arny.mlscanner.data.ocr
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.arny.mlscanner.data.ocr.engine.HuaweiMLKitEngine
 import com.arny.mlscanner.data.ocr.engine.HybridEngine
 import com.arny.mlscanner.data.ocr.engine.MLKitEngine
 import com.arny.mlscanner.data.ocr.engine.OcrEngine
@@ -37,6 +38,7 @@ class OcrRepositoryImpl(
 
     // Движки создаются один раз
     private val mlkitEngine: MLKitEngine = MLKitEngine()
+    private val huaweiEngine: HuaweiMLKitEngine = HuaweiMLKitEngine()
     private val tesseractEngine: TesseractEngine = TesseractEngine(context)
 
     // Hybrid использует ТЕ ЖЕ экземпляры
@@ -53,6 +55,7 @@ class OcrRepositoryImpl(
             if (initialized) {
                 return@withContext mapOf(
                     "ML Kit" to mlkitEngine.isReady(),
+                    "Huawei ML Kit" to huaweiEngine.isReady(),
                     "Tesseract" to tesseractEngine.isReady()
                 )
             }
@@ -60,10 +63,12 @@ class OcrRepositoryImpl(
             Log.i(TAG, "Initializing OCR engines...")
 
             val mlkitResult = async { mlkitEngine.initialize() }
+            val huaweiResult = async { huaweiEngine.initialize() }
             val tessResult = async { tesseractEngine.initialize() }
 
             val results = mapOf(
                 "ML Kit" to mlkitResult.await(),
+                "Huawei ML Kit" to huaweiResult.await(),
                 "Tesseract" to tessResult.await()
             )
 
@@ -91,11 +96,13 @@ class OcrRepositoryImpl(
             OcrEngineType.TESSERACT -> imagePreprocessor.prepareForTesseract(bitmap, settings)
             OcrEngineType.HYBRID -> imagePreprocessor.prepareForTesseract(bitmap, settings)
             OcrEngineType.ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings)
+            OcrEngineType.HUAWEI_ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings)
             OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")
         }
 
         val engine: OcrEngine = when (settings.engineType) {
             OcrEngineType.ML_KIT -> mlkitEngine
+            OcrEngineType.HUAWEI_ML_KIT -> huaweiEngine
             OcrEngineType.TESSERACT -> tesseractEngine
             OcrEngineType.HYBRID -> hybridEngine
             OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")
@@ -150,6 +157,7 @@ class OcrRepositoryImpl(
         val processed = imagePreprocessor.prepareBaseImage(bitmap, settings)
         val engine: OcrEngine = when (engineName.uppercase()) {
             "MLKIT" -> mlkitEngine
+            "HUAWEI" -> huaweiEngine
             "TESSERACT" -> tesseractEngine
             "HYBRID" -> hybridEngine
             else -> hybridEngine
@@ -168,6 +176,7 @@ class OcrRepositoryImpl(
 
     override fun release() {
         mlkitEngine.release()
+        huaweiEngine.release()
         tesseractEngine.release()
         // hybridEngine.release() — не нужно, т.к. он не владеет движками
         initialized = false

@@ -163,6 +163,8 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            pickFirsts += "lib/arm64-v8a/libc++_shared.so"
+            pickFirsts += "lib/armeabi-v7a/libc++_shared.so"
         }
         resources {
             excludes += listOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/license.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/notice.txt", "META-INF/ASL2.0")
@@ -184,6 +186,12 @@ dependencies {
 // ML Kit Text Recognition V2 (offline)
 implementation(libs.text.recognition) // Latin + Cyrillic via language hints
 implementation(libs.language.id) // Language detection
+
+    // Huawei ML Kit (PoC - experimental)
+    implementation(libs.huawei.mlkit.textrecognition)
+    implementation(libs.huawei.mlkit.textrecognition.latin)
+    implementation(libs.huawei.mlkit.textrecognition.cn)
+    implementation(libs.huawei.agconnect.core)
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
     implementation(libs.onnxruntime)
     // CameraX

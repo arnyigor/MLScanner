@@ -10,6 +10,7 @@
 
     <application
         android:allowBackup="true"
+        tools:replace="android:allowBackup"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -48,6 +49,11 @@
 
         <meta-data
             android:name="com.google.android.gms.vision.DEPENDENCIES"
+            android:value="ocr" />
+
+        <!-- ▶ Huawei ML Kit auto-download model (PoC) -->
+        <meta-data
+            android:name="com.huawei.hms.ml.DEPENDENCY"
             android:value="ocr" />
 
         <!-- ▶ Запретить передачу данных в Firebase -->

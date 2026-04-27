@@ -34,6 +34,7 @@ ktor = "3.3.3"
 kotlinx-coroutines = "1.10.2"
 sqliteKtx = "2.6.2"
 textRecognition = "16.0.1"
+huaweiMlKit = "3.17.11.304"
 onnxRuntime = "1.23.2"
 pdfboxAndroid = "2.0.27.0"  # Обновлено до стабильной версии
 sqlcipher = "4.12.0"     # Обновлено до нового артефакта
@@ -108,6 +109,12 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "textRecognition" }
+
+# Huawei ML Kit (PoC)
+huawei-mlkit-textrecognition = { module = "com.huawei.hms:ml-computer-vision-ocr", version.ref = "huaweiMlKit" }
+huawei-mlkit-textrecognition-latin = { module = "com.huawei.hms:ml-computer-vision-ocr-latin-model", version.ref = "huaweiMlKit" }
+huawei-mlkit-textrecognition-cn = { module = "com.huawei.hms:ml-computer-vision-ocr-cn-model", version.ref = "huaweiMlKit" }
+huawei-agconnect-core = { module = "com.huawei.agconnect:agconnect-core", version = "1.9.1.301" }
 onnxruntime = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxRuntime" }  # Используем только одну версию
 pdfbox-android = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfboxAndroid" }
 sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher" }  # Обновленный артефакт

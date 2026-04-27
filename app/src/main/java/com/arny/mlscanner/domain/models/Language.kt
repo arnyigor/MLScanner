@@ -58,12 +58,13 @@ enum class OcrEngineType(
 ) {
     TESSERACT("Tesseract", isExperimental = false),
     ML_KIT("ML Kit", isExperimental = false),
+    HUAWEI_ML_KIT("Huawei ML Kit", isExperimental = false),
     HYBRID("Hybrid", isExperimental = false),
     BARCODE("Штрихкод", isExperimental = false);
 
     companion object {
         /** Рекомендуемый движок для русского текста */
-        val DEFAULT_FOR_RUSSIAN = TESSERACT
+        val DEFAULT_FOR_RUSSIAN = HUAWEI_ML_KIT
         
         /** Рекомендуемый движок для английского текста */
         val DEFAULT_FOR_ENGLISH = ML_KIT
