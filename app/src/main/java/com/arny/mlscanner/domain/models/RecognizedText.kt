@@ -70,15 +70,16 @@ data class RecognizedText(
         )
     }
 
-    /** Применить сырой текст и пересчитать форматированный вывод/паттерны. */
+/** Применить сырой текст и пересчитать форматированный вывод/паттерны. */
     fun applyRawText(newText: String): RecognizedText {
-        val formatted = TextFormatter.format(newText, formatMode)
+        // Всегда используем RAW режим для распознавания паттернов при редактировании
+        val formatted = TextFormatter.format(newText, TextFormatter.FormatMode.RAW)
 
         return copy(
             originalText = newText,
-            formattedText = formatted.text,
+            formattedText = newText, // Сохраняем как есть в RAW режиме
             recognizedPatterns = formatted.patterns,
-            formatMode = formatted.mode
+            formatMode = TextFormatter.FormatMode.RAW // Явно устанавливаем RAW режим
         )
     }
 
