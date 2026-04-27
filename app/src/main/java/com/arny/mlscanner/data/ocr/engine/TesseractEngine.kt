@@ -47,9 +47,9 @@ class TesseractEngine(private val context: Context) : OcrEngine {
 
         private const val MAX_SIDE = 3000           // Даунскейл выше этого
         private const val MAX_PIXELS = 8_000_000L   // 8MP макс (увеличен для апскейла)
-        private const val MIN_SHORT_SIDE = 400      // Апскейл если короткая < этого
-        private const val TARGET_SHORT_SIDE = 600   // Апскейлим до этого
-        private const val MAX_UPSCALE = 3f          // Макс множитель апскейла
+        private const val MIN_SHORT_SIDE = 1000     // Апскейл если короткая < этого (увеличено для узких crop)
+        private const val TARGET_SHORT_SIDE = 1600  // Апскейлим до этого (увеличено для лучшего качества)
+        private const val MAX_UPSCALE = 4f          // Макс множитель апскейла (увеличено для узких crop)
 
         // Scoring weights
         private const val WEIGHT_CONFIDENCE = 1.2f

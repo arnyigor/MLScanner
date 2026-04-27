@@ -291,12 +291,22 @@ class ImagePreprocessor {
             }
 
             val mean = Core.mean(gray).`val`[0]
-            val needsInversion = mean < BRIGHTNESS_DARK_THRESHOLD
+            
+            // Для больших вертикальных изображений (книжные обложки) с тёмными областями
+            // не инвертируем автоматически, т.к. текст может быть светлым на тёмном фоне
+            val ratio = baseBitmap.width.toFloat() / baseBitmap.height.coerceAtLeast(1)
+            val isVerticalImage = ratio < 0.8f
+            val isLargeImage = minOf(baseBitmap.width, baseBitmap.height) > 800
+            
+            val needsInversion = mean < BRIGHTNESS_DARK_THRESHOLD && 
+                                 !(isVerticalImage && isLargeImage && mean < 30)
 
             if (needsInversion) {
                 Log.d(TAG, "OCR: dark bg (mean=${"%.0f".format(mean)}), inverting")
                 Core.bitwise_not(gray, gray)
                 Imgproc.cvtColor(gray, mat, Imgproc.COLOR_GRAY2RGBA)
+            } else if (mean < BRIGHTNESS_DARK_THRESHOLD) {
+                Log.d(TAG, "OCR: dark bg (mean=${"%.0f".format(mean)}), but skipping inversion (vertical large image)")
             }
 
             // Возвращаем ЦВЕТНОЙ bitmap — Tesseract сам сделает grayscale

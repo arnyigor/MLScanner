@@ -445,15 +445,27 @@ class ScanViewModel(
     private fun applyCrop(source: Bitmap, crop: CropRect?): Bitmap {
         if (crop == null) return source
 
-        val left = crop.left.toInt().coerceIn(0, source.width - 1)
-        val top = crop.top.toInt().coerceIn(0, source.height - 1)
-        val width = crop.width.toInt().coerceAtMost(source.width - left)
-        val height = crop.height.toInt().coerceAtMost(source.height - top)
+        // Добавляем padding вокруг crop для лучшего OCR
+        // Tesseract работает лучше, когда есть белые поля вокруг текста
+        val PADDING_PERCENT = 0.05f // 5% padding с каждой стороны
+        
+        val paddingX = (crop.width * PADDING_PERCENT).toInt()
+        val paddingY = (crop.height * PADDING_PERCENT).toInt()
+        
+        val left = (crop.left - paddingX).toInt().coerceIn(0, source.width - 1)
+        val top = (crop.top - paddingY).toInt().coerceIn(0, source.height - 1)
+        val right = (crop.left + crop.width + paddingX).toInt().coerceAtMost(source.width)
+        val bottom = (crop.top + crop.height + paddingY).toInt().coerceAtMost(source.height)
+        
+        val width = right - left
+        val height = bottom - top
 
         if (width <= 10 || height <= 10) {
             Log.w(TAG, "Crop too small ($width x $height), using full image")
             return source
         }
+        
+        Log.d(TAG, "Crop with padding: ${crop.width.toInt()}x${crop.height.toInt()} → ${width}x${height}")
 
         return Bitmap.createBitmap(source, left, top, width, height)
     }
@@ -488,6 +500,26 @@ class ScanViewModel(
         val w = bitmap.width
         val h = bitmap.height
         val maxSide = maxOf(w, h)
+        val minSide = minOf(w, h)
+
+        // Если минимальная сторона слишком маленькая - апскейлим
+        val MIN_SIDE_FOR_OCR = 600
+        if (minSide < MIN_SIDE_FOR_OCR) {
+            val upscaleRatio = MIN_SIDE_FOR_OCR.toFloat() / minSide
+            val newW = (w * upscaleRatio).toInt().coerceAtLeast(1)
+            val newH = (h * upscaleRatio).toInt().coerceAtLeast(1)
+            
+            Log.d(TAG, "Upscaling narrow image: ${w}x${h} → ${newW}x${newH} (minSide $minSide→${minOf(newW, newH)})")
+            
+            val scaled = bitmap.scale(newW, newH)
+            return if (scaled.config != Bitmap.Config.ARGB_8888) {
+                val copy = scaled.copy(Bitmap.Config.ARGB_8888, false)
+                if (scaled !== bitmap) scaled.recycle()
+                copy
+            } else {
+                scaled
+            }
+        }
 
         if (maxSide == targetMaxSide) return bitmap
 
