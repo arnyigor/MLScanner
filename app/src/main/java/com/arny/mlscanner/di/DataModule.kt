@@ -1,8 +1,9 @@
 package com.arny.mlscanner.di
 
-import com.arny.mlscanner.data.ocr.OcrRepositoryImpl
+import com.arny.mlscanner.data.ocr.OcrRepositoryImplV2
 import com.arny.mlscanner.data.pdf.PdfRedactionEngine
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
+import com.arny.mlscanner.data.preprocessing.ScanSettingsAutoTuner
 import com.arny.mlscanner.data.prefs.Prefs
 import com.arny.mlscanner.data.prefs.SecurePrefs
 import com.arny.mlscanner.domain.usecases.OcrRepository
@@ -21,10 +22,11 @@ val dataModule = module {
 
     // Preprocessing
     single { ImagePreprocessor() }
+    single { ScanSettingsAutoTuner() }
 
     // OCR Repository (единственная точка доступа к OCR)
     single<OcrRepository> {
-        OcrRepositoryImpl(
+        OcrRepositoryImplV2(
             context = androidContext(),
             imagePreprocessor = get()
         )

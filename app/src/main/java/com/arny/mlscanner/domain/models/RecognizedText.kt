@@ -60,9 +60,12 @@ data class RecognizedText(
     
     /** Обновить сырой текст без тяжёлого пересчёта на каждый символ. */
     fun updateRawText(newText: String): RecognizedText {
+        val formatted = TextFormatter.format(newText, TextFormatter.FormatMode.RAW)
+
         return copy(
             originalText = newText,
             formattedText = newText,
+            recognizedPatterns = formatted.patterns,
             formatMode = TextFormatter.FormatMode.RAW
         )
     }

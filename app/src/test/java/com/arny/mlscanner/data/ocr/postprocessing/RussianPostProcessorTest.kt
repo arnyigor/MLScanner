@@ -184,4 +184,90 @@ class RussianPostProcessorTest {
         // Переносы строк должны сохраниться
         assertEquals(3, result.lines().size)
     }
+    
+    @Test
+    fun `test URL not broken`() {
+        // URL не должны ломаться при постобработке
+        val input = "Сайт: example.com и test.ru"
+        val expected = "Сайт: example.com и test.ru"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue("example.com should be preserved", result.contains("example.com"))
+        assertTrue("test.ru should be preserved", result.contains("test.ru"))
+    }
+    
+    @Test
+    fun `test URL with protocol not broken`() {
+        val input = "Ссылка: https://example.com/path"
+        val expected = "Ссылка: https://example.com/path"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue(result.contains("https://example.com/path"))
+    }
+    
+    @Test
+    fun `test email not broken`() {
+        // Email не должны ломаться
+        val input = "Почта: test@example.com"
+        val expected = "Почта: test@example.com"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue(result.contains("test@example.com"))
+    }
+    
+    @Test
+    fun `test URL with subdomain not broken`() {
+        val input = "Адрес: www.example.com и api.test.ru"
+        val expected = "Адрес: www.example.com и api.test.ru"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue(result.contains("www.example.com"))
+        assertTrue(result.contains("api.test.ru"))
+    }
+    
+    @Test
+    fun `test mixed text with URL`() {
+        // Смешанный текст с URL и обычными предложениями
+        val input = "Посетите сайт example.com.Там много информации.Также смотрите test.ru"
+        val result = RussianPostProcessor.process(input)
+        
+        // URL должны остаться целыми
+        assertTrue("example.com should be preserved", result.contains("example.com"))
+        assertTrue("test.ru should be preserved", result.contains("test.ru"))
+        
+        // Пробелы после точек в обычных предложениях должны добавиться
+        assertTrue("Space after sentence should be added", result.contains(". Там") || result.contains(".Там"))
+    }
+    
+    @Test
+    fun `test date not broken`() {
+        // Даты не должны ломаться
+        val input = "Дата: 26.04.2026"
+        val expected = "Дата: 26.04.2026"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue(result.contains("26.04.2026"))
+    }
+    
+    @Test
+    fun `test decimal number not broken`() {
+        // Десятичные числа не должны ломаться
+        val input = "Цена: 1500.50 руб"
+        val expected = "Цена: 1500.50 руб"
+        
+        val result = RussianPostProcessor.process(input)
+        
+        assertEquals(expected, result)
+        assertTrue(result.contains("1500.50"))
+    }
 }

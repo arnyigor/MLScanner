@@ -132,8 +132,9 @@ object RussianPostProcessor {
         result = result.replace(Regex(" +([.,;:!?])"), "$1")
         
         // Добавление пробела после знаков препинания (если его нет)
-        // НО НЕ в датах и числах (например, 26.04.2026 или 1500.00)
-        result = result.replace(Regex("([.,;:!?])(?=[А-Яа-яA-Za-z])"), "$1 ")
+        // НО НЕ в датах, числах, URL и email (например, 26.04.2026, 1500.00, example.com, test@mail.ru)
+        // Проверяем, что после точки/запятой идёт буква, но это не часть URL/email
+        result = result.replace(Regex("([.,;:!?])(?=[А-Яа-яA-Za-z])(?![A-Za-z0-9@./:-])"), "$1 ")
         
         // Удаление пробелов в начале и конце строк
         result = result.lines().joinToString("\n") { it.trim() }

@@ -136,7 +136,7 @@ object TextFormatter {
     }
 
     private fun normalizeInteractiveText(text: String): String {
-        return text
+        val normalized = text
             .replace("\r\n", "\n")
             .replace("\r", "\n")
             .replace(Regex("""(?i)\b(https?)[ \t]*:[ \t]*/[ \t]*/[ \t]*"""), "$1://")
@@ -144,6 +144,103 @@ object TextFormatter {
             .replace(Regex("""(?<=\w)[ \t]*@[ \t]*(?=\w)"""), "@")
             .replace(Regex("""(?<=\w)[ \t]*\.[ \t]*(?=\w)"""), ".")
             .replace(Regex("""(?<=\w)[ \t]*/[ \t]*(?=\w)"""), "/")
+            .replace(Regex("""(?i)(https?://\S*/\d+)[ \t]*\n[ \t]*(\d+)\b"""), "$1$2")
+
+        return normalized.lines().joinToString("\n") { normalizeUrlLikeLine(it) }
+    }
+
+    private fun normalizeUrlLikeLine(line: String): String {
+        val match = Regex("""(?i)\bhttps?://\S+""").find(line) ?: return line
+        val prefix = line.substring(0, match.range.first)
+        val tail = line.substring(match.range.first)
+        val tokens = tail.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return line
+
+        val candidateTokens = mutableListOf<String>()
+        for (token in tokens) {
+            val normalized = normalizeUrlToken(token)
+            if (candidateTokens.isEmpty()) {
+                if (!normalized.startsWith("http://", ignoreCase = true) &&
+                    !normalized.startsWith("https://", ignoreCase = true)
+                ) {
+                    return line
+                }
+                candidateTokens += normalized
+                continue
+            }
+
+            if (!isUrlContinuationToken(normalized)) break
+            candidateTokens += normalized
+        }
+
+        if (candidateTokens.size == 1) return line
+
+        val urlTokens = trimNonUrlTrailingTokens(candidateTokens)
+        if (urlTokens.size == 1) return line
+
+        val suffixTokens = tokens.drop(urlTokens.size)
+        val suffix = if (suffixTokens.isEmpty()) "" else " " + suffixTokens.joinToString(" ")
+        return prefix + buildUrlFromTokens(urlTokens) + suffix
+    }
+
+    private fun normalizeUrlToken(token: String): String {
+        return token
+            .trim(' ', '\t', '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'')
+            .map { char ->
+                when (char) {
+                    'а', 'А' -> 'a'
+                    'е', 'Е' -> 'e'
+                    'о', 'О' -> 'o'
+                    'р', 'Р' -> 'p'
+                    'с', 'С' -> 'c'
+                    'х', 'Х' -> 'x'
+                    'у', 'У' -> 'y'
+                    'к', 'К' -> 'k'
+                    'м', 'М' -> 'm'
+                    'т', 'Т' -> 't'
+                    'п', 'П' -> 'n'
+                    else -> char
+                }
+            }
+            .joinToString("")
+    }
+
+    private fun isUrlContinuationToken(token: String): Boolean {
+        if (token.length > 80) return false
+        return token.matches(Regex("""[A-Za-z0-9._~?#@!$&()*+,;=%-]+"""))
+    }
+
+    private fun trimNonUrlTrailingTokens(tokens: List<String>): List<String> {
+        val lastAnchorIndex = tokens.indexOfLast { token ->
+            token.any(Char::isDigit) || token.any { it in "._~?#@!$&()*+,;=%-" }
+        }
+
+        return if (lastAnchorIndex <= 0) {
+            tokens.take(1)
+        } else {
+            tokens.take(lastAnchorIndex + 1)
+        }
+    }
+
+    private fun buildUrlFromTokens(tokens: List<String>): String {
+        return buildString {
+            append(tokens.first())
+            var previous = tokens.first()
+            tokens.drop(1).forEach { token ->
+                if (token.all(Char::isDigit) && hasTrailingNumericPathSegment(previous)) {
+                    append(token)
+                } else {
+                    append('/')
+                    append(token)
+                }
+                previous = token
+            }
+        }
+    }
+
+    private fun hasTrailingNumericPathSegment(token: String): Boolean {
+        val segment = token.substringAfterLast('/')
+        return segment.isNotEmpty() && segment.all(Char::isDigit)
     }
     
     /**

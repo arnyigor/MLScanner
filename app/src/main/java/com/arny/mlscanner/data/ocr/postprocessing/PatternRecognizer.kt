@@ -1,6 +1,5 @@
 package com.arny.mlscanner.data.ocr.postprocessing
 
-import android.util.Patterns
 import java.util.regex.Pattern
 
 /**
@@ -68,6 +67,28 @@ object PatternRecognizer {
     
     private val CARD_PATTERN = Pattern.compile(
         "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+    )
+
+    private val EMAIL_PATTERN = Pattern.compile(
+        """(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b"""
+    )
+
+    private val EXPLICIT_URL_PATTERN = Pattern.compile(
+        """(?i)\bhttps?://[A-Za-z0-9АаЕеОоРрСсХхУуКкМмТтПп._~:/?#@!$&()*+,;=%\-]+"""
+    )
+
+    private val WWW_URL_PATTERN = Pattern.compile(
+        """(?i)(?<![@\w])www\.[^\s<>"'{}|\\^`\[\]]+"""
+    )
+
+    private val BARE_DOMAIN_PATTERN = Pattern.compile(
+        """(?i)(?<![@\w])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:/[^\s<>"'{}|\\^`\[\]]*)?"""
+    )
+
+    private val COMMON_TLDS = setOf(
+        "ru", "рф", "com", "org", "net", "edu", "gov", "io", "ai", "app", "dev",
+        "info", "biz", "me", "tv", "co", "uk", "de", "fr", "it", "es", "nl",
+        "pl", "ua", "by", "kz", "cn", "jp", "kr"
     )
     
     /**
@@ -265,7 +286,7 @@ object PatternRecognizer {
      */
     fun recognizeEmails(text: String): List<RecognizedPattern> {
         val patterns = mutableListOf<RecognizedPattern>()
-        val matcher = Patterns.EMAIL_ADDRESS.matcher(text)
+        val matcher = EMAIL_PATTERN.matcher(text)
         
         while (matcher.find()) {
             val email = matcher.group()
@@ -288,23 +309,82 @@ object PatternRecognizer {
      */
     fun recognizeUrls(text: String): List<RecognizedPattern> {
         val patterns = mutableListOf<RecognizedPattern>()
-        val matcher = Patterns.WEB_URL.matcher(text)
-        
-        while (matcher.find()) {
-            val rawUrl = matcher.group()
-            val url = rawUrl.trimEnd('.', ',', ';', ':', ')')
-            
-            patterns.add(
-                RecognizedPattern(
-                    type = PatternType.URL,
-                    value = url,
-                    start = matcher.start(),
-                    end = matcher.start() + url.length
+        val occupied = BooleanArray(text.length)
+
+        listOf(EXPLICIT_URL_PATTERN, WWW_URL_PATTERN, BARE_DOMAIN_PATTERN).forEach { pattern ->
+            val matcher = pattern.matcher(text)
+
+            while (matcher.find()) {
+                val rawUrl = matcher.group()
+                val url = normalizeUrlValue(rawUrl)
+                if (!isValidUrlCandidate(url)) continue
+
+                val start = matcher.start()
+                val end = matcher.end().coerceAtMost(text.length)
+                if ((start until end).any { occupied[it] }) continue
+
+                patterns.add(
+                    RecognizedPattern(
+                        type = PatternType.URL,
+                        value = url,
+                        start = start,
+                        end = end
+                    )
                 )
-            )
+
+                for (index in start until end) {
+                    occupied[index] = true
+                }
+            }
         }
         
         return patterns
+    }
+
+    private fun trimUrlBoundary(rawUrl: String): String {
+        return rawUrl.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'')
+    }
+
+    private fun normalizeUrlValue(rawUrl: String): String {
+        return fixUrlOcrConfusables(trimUrlBoundary(rawUrl))
+    }
+
+    private fun fixUrlOcrConfusables(value: String): String {
+        return buildString(value.length) {
+            for (char in value) {
+                append(
+                    when (char) {
+                        'а', 'А' -> 'a'
+                        'е', 'Е' -> 'e'
+                        'о', 'О' -> 'o'
+                        'р', 'Р' -> 'p'
+                        'с', 'С' -> 'c'
+                        'х', 'Х' -> 'x'
+                        'у', 'У' -> 'y'
+                        'к', 'К' -> 'k'
+                        'м', 'М' -> 'm'
+                        'т', 'Т' -> 't'
+                        'п', 'П' -> 'n'
+                        else -> char
+                    }
+                )
+            }
+        }
+    }
+
+    private fun isValidUrlCandidate(url: String): Boolean {
+        if (url.isBlank() || url.contains("@")) return false
+
+        val lower = url.lowercase()
+        val hostAndPath = when {
+            lower.startsWith("http://") -> url.substringAfter("://")
+            lower.startsWith("https://") -> url.substringAfter("://")
+            else -> url
+        }
+        val host = hostAndPath.substringBefore('/').substringBefore('?').substringBefore('#')
+        val tld = host.substringAfterLast('.', "")
+
+        return host.contains('.') && tld in COMMON_TLDS
     }
     
     /**
