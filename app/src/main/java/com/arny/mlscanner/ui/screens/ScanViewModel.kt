@@ -6,7 +6,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
-import com.arny.mlscanner.data.preprocessing.ScanSettingsAutoTuner
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.models.OcrEngineType
 import com.arny.mlscanner.domain.models.errors.OcrError
@@ -33,8 +32,7 @@ import androidx.core.graphics.scale
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
     private val imagePreprocessor: ImagePreprocessor,
-    private val scanBarcodeUseCase: ScanBarcodeUseCase? = null,
-    private val scanSettingsAutoTuner: ScanSettingsAutoTuner = ScanSettingsAutoTuner()
+    private val scanBarcodeUseCase: ScanBarcodeUseCase? = null
 ) : ViewModel() {
 
     companion object {
@@ -60,25 +58,21 @@ class ScanViewModel(
 
     // Public API
 
-    fun onImageCaptured(bitmap: Bitmap) {
+fun onImageCaptured(bitmap: Bitmap) {
         Log.d(TAG, "Image captured: ${bitmap.width}x${bitmap.height}")
         originalBitmap = bitmap
         val preview = scaleBitmapSafe(bitmap, PREVIEW_MAX_DIMENSION)
         previewSourceBitmap = preview
-        val recommendedSettings = scanSettingsAutoTuner.recommend(bitmap, _uiState.value.settings)
 
         _uiState.update {
             it.copy(
                 step = ScanStep.PREPROCESSING,
                 previewBitmap = preview,
-                settings = recommendedSettings,
-                originalImageSize = ImageSize(bitmap.width, bitmap.height),
+originalImageSize = ImageSize(bitmap.width, bitmap.height),
                 error = null,
                 recognizedText = null
             )
         }
-
-        applyFiltersDebounced(recommendedSettings)
     }
 
     fun onSettingsChanged(settings: ScanSettings) {

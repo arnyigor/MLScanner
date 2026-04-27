@@ -4,7 +4,14 @@ package com.arny.mlscanner.data.ocr.postprocessing
  * Форматтер текста для разных режимов отображения
  */
 object TextFormatter {
-    
+    private const val DEBUG = false
+
+    private fun log(tag: String, msg: String) {
+        if (DEBUG) {
+            android.util.Log.d("TextFormatter", "[$tag] $msg")
+        }
+    }
+
     /**
      * Режимы форматирования
      */
@@ -12,7 +19,7 @@ object TextFormatter {
         RAW,        // Сырой текст как есть
         MARKDOWN    // Форматированный текст с распознанными паттернами
     }
-    
+
     /**
      * Форматированный результат
      */
@@ -21,7 +28,7 @@ object TextFormatter {
         val patterns: List<PatternRecognizer.RecognizedPattern>,
         val mode: FormatMode
     )
-    
+
     /**
      * Форматирует текст в зависимости от режима
      * ВАЖНО: всегда работает с актуальным текстом (например, из EditText)
@@ -32,15 +39,18 @@ object TextFormatter {
             FormatMode.MARKDOWN -> formatMarkdown(text)
         }
     }
-    
+
     /**
      * Raw режим - текст как есть, но с распознанными паттернами
      */
     private fun formatRaw(text: String): FormattedResult {
+        log("formatRaw", "Input text: ${text.replace("\n", "\\n")}")
         // В RAW режиме тоже распознаём паттерны для кликабельности
         val normalizedText = normalizeInteractiveText(text)
+        log("formatRaw", "Normalized text: ${normalizedText.replace("\n", "\\n")}")
         val patterns = PatternRecognizer.recognizeAll(normalizedText)
-        
+        log("formatRaw", "Found ${patterns.size} patterns: ${patterns.map { it.value }}")
+
         return FormattedResult(
             text = text,
             patterns = patterns,
@@ -135,8 +145,10 @@ object TextFormatter {
         return result
     }
 
-    private fun normalizeInteractiveText(text: String): String {
-        val normalized = text
+private fun normalizeInteractiveText(text: String): String {
+        log("normalizeInteractiveText", "Input: ${text.replace("\n", "\\n")}")
+
+        var normalized = text
             .replace("\r\n", "\n")
             .replace("\r", "\n")
             .replace(Regex("""(?i)\b(https?)[ \t]*:[ \t]*/[ \t]*/[ \t]*"""), "$1://")
@@ -144,13 +156,60 @@ object TextFormatter {
             .replace(Regex("""(?<=\w)[ \t]*@[ \t]*(?=\w)"""), "@")
             .replace(Regex("""(?<=\w)[ \t]*\.[ \t]*(?=\w)"""), ".")
             .replace(Regex("""(?<=\w)[ \t]*/[ \t]*(?=\w)"""), "/")
-            .replace(Regex("""(?i)(https?://\S*/\d+)[ \t]*\n[ \t]*(\d+)\b"""), "$1$2")
 
-        return normalized.lines().joinToString("\n") { line ->
+        log("normalizeInteractiveText", "After basic normalization: ${normalized.replace("\n", "\\n")}")
+
+        // Склеиваем URL разбитые переносами строк (до разбиения на строки!)
+        // Обрабатывает: "https://yandex.ru/video/preview/160421091605\n16050498" -> "https://yandex.ru/video/preview/16042109160516050498"
+        normalized = mergeBrokenUrls(normalized)
+        log("normalizeInteractiveText", "After mergeBrokenUrls: ${normalized.replace("\n", "\\n")}")
+
+        val result = normalized.lines().joinToString("\n") { line ->
             // Проверяем наличие URL-подобного текста без протокола
             val preprocessed = preprocessUrlLikeLine(line)
             normalizeUrlLikeLine(preprocessed)
         }
+        log("normalizeInteractiveText", "Final result: ${result.replace("\n", "\\n")}")
+        return result
+    }
+
+    /**
+     * Склеивает URL разбитые переносами строк.
+     * Например: "https://yandex.ru/video/preview/160421091605\n16050498" -> "https://yandex.ru/video/preview/16042109160516050498"
+     */
+    private fun mergeBrokenUrls(text: String): String {
+        log("mergeBrokenUrls", "Input: ${text.replace("\n", "\\n")}")
+
+        // Ищем все потенциальные URL с переносами строк
+        // Паттерн: любой URL-подобный текст заканчивающийся на цифры/символы, затем \n, затем цифры
+        val urlWithNewlinePattern = Regex("""(?i)([^\s]*\d+)(\n)(\d+)""")
+        val matches = urlWithNewlinePattern.findAll(text).toList()
+        log("mergeBrokenUrls", "Found ${matches.size} potential broken URL patterns")
+
+        var result = text
+        for (match in matches) {
+            val urlPart = match.groupValues[1]
+            val newline = match.groupValues[2]
+            val nextPart = match.groupValues[3]
+
+            log("mergeBrokenUrls", "Match: urlPart='$urlPart', nextPart='$nextPart'")
+
+            // Проверяем что urlPart похож на URL (содержит домен или /)
+            val looksLikeUrl = urlPart.contains("yandex") || urlPart.contains("google") ||
+                              urlPart.contains("/") || urlPart.contains(".")
+
+            if (looksLikeUrl) {
+                // Проверяем что nextPart - продолжение (только цифры)
+                if (nextPart.all(Char::isDigit)) {
+                    val merged = "$urlPart$nextPart"
+                    log("mergeBrokenUrls", "MERGED: $merged")
+                    result = result.replace(match.value, merged)
+                }
+            }
+        }
+
+        log("mergeBrokenUrls", "Output: ${result.replace("\n", "\\n")}")
+        return result
     }
 
     /**
@@ -158,11 +217,12 @@ object TextFormatter {
      * Например: "https://yandex.ru/video/preview/160421091605\n16050498"
      * Превращается в: "https://yandex.ru/video/preview/16042109160516050498"
      */
-    private fun preprocessUrlLikeLine(line: String): String {
+private fun preprocessUrlLikeLine(line: String): String {
+        log("preprocessUrlLikeLine", "Input line: $line")
         // Паттерн: строка с URL-like доменом и цифрами после переноса
         // Например: "yandex.ru/video/preview/160421091605" на одной строке
         // и "16050498" на следующей - это один URL
-        
+
         // Если строка содержит домен и путь но не протокол, добавляем https://
         val domainUrlPattern = Regex("""
             (?i)                       # Case insensitive
@@ -179,23 +239,26 @@ object TextFormatter {
             val prefix = urlMatch.groups[1]?.value ?: ""
             val domain = urlMatch.groups[4]?.value ?: ""
             val path = urlMatch.groups[5]?.value ?: ""
-            
+            log("preprocessUrlLikeLine", "Found URL-like: prefix='$prefix', domain='$domain', path='$path'")
+
             // Если протокола нет, добавляем https://
             if (prefix.isEmpty() || !prefix.contains("://")) {
                 val start = urlMatch.range.first
                 val beforeUrl = line.substring(0, start)
                 val afterUrl = line.substring(urlMatch.range.last + 1)
-                
+
                 // Склеиваем: убираем пробелы между доменом/путём и цифрами после
                 val reconstructedUrl = "https://${domain}${path}"
+                log("preprocessUrlLikeLine", "Reconstructed URL: $reconstructedUrl")
                 return beforeUrl + reconstructedUrl + afterUrl
             }
         }
-        
+
         return line
     }
 
     private fun normalizeUrlLikeLine(line: String): String {
+        log("normalizeUrlLikeLine", "Input line: $line")
         val match = Regex("""(?i)\bhttps?://\S+""").find(line) ?: return line
         val prefix = line.substring(0, match.range.first)
         val tail = line.substring(match.range.first)
