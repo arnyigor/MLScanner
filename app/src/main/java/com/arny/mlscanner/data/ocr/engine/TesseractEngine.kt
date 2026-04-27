@@ -22,6 +22,8 @@ import androidx.core.graphics.scale
 import androidx.core.graphics.createBitmap
 import com.arny.mlscanner.data.ocr.postprocessing.TextPostProcessor
 import com.arny.mlscanner.data.ocr.postprocessing.RussianPostProcessor
+import com.arny.mlscanner.data.ocr.postprocessing.ReadingOrderFixer
+import com.arny.mlscanner.data.ocr.postprocessing.OcrWordBox
 import com.arny.mlscanner.data.ocr.preprocessing.ShadowRemovalPreprocessor
 import org.opencv.android.Utils
 import org.opencv.core.Core
@@ -233,7 +235,7 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         if (profiles.isEmpty()) {
             val defaultResult = recognize(bitmap, false)
             return@withContext OcrCandidate(
-                profile = TesseractProfile.RUSSIAN_PROFILES.first(),
+                profile = TesseractProfile.RUSSIAN_DOCUMENT_PROFILES.first(),
                 result = defaultResult,
                 score = scoreResult(defaultResult)
             )
@@ -350,12 +352,31 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             api.clear()
 
             val cleanedWords = postProcessWords(rawWords)
-            val blocks = buildBlocksFromWords(cleanedWords)
+            
+            // Используем ReadingOrderFixer для правильной сборки текста из boxes
+            val wordBoxes = cleanedWords.map { w ->
+                OcrWordBox(w.text, w.box, w.confidence)
+            }
+            val blocks = ReadingOrderFixer.buildBlocks(wordBoxes, safeBitmap.width, safeBitmap.height)
             
             // Используем rawFullText как основной источник (сохраняет reading order)
             val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
             val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
+            
+            // Логируем для диагностики
+            val rawWordCount = countWords(rawText)
+            val boxedWordCount = countWords(boxedText)
+            val rawLines = rawText.lines().count { it.isNotBlank() }
+            val boxedLines = boxedText.lines().count { it.isNotBlank() }
+            
+            Log.d(TAG, "Profile=${profile.name} PSM=${profile.psm} rawWords=$rawWordCount boxedWords=$boxedWordCount rawLines=$rawLines boxedLines=$boxedLines")
+            Log.d(TAG, "rawText preview: ${rawText.take(200)}")
+            Log.d(TAG, "boxedText preview: ${boxedText.take(200)}")
+            
             val fullText = chooseBestText(rawText, boxedText)
+            val selected = if (fullText == rawText) "raw" else "boxed"
+            Log.d(TAG, "Selected: $selected")
+            Log.d(TAG, "fullText preview: ${fullText.take(200)}")
             
             // Применяем постобработку для русского текста
             val postProcessedText = if (profile.language == TesseractLanguage.RUS_ONLY || 
@@ -363,6 +384,7 @@ class TesseractEngine(private val context: Context) : OcrEngine {
                 val processed = RussianPostProcessor.process(fullText)
                 val metrics = RussianPostProcessor.analyzeQuality(fullText, processed)
                 Log.d(TAG, "Russian post-processing: $metrics")
+                Log.d(TAG, "postProcessed preview: ${processed.take(200)}")
                 processed
             } else {
                 fullText
@@ -648,17 +670,37 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             api.clear()
 
             val cleanedWords = postProcessWords(rawWords)
-            val blocks = buildBlocksFromWords(cleanedWords)
+            
+            // Используем ReadingOrderFixer для правильной сборки текста из boxes
+            val wordBoxes = cleanedWords.map { w ->
+                OcrWordBox(w.text, w.box, w.confidence)
+            }
+            val blocks = ReadingOrderFixer.buildBlocks(wordBoxes, safeBitmap.width, safeBitmap.height)
             
             // Используем rawFullText как основной источник (сохраняет reading order)
             val rawText = TextPostProcessor.normalizeTesseractText(rawFullText)
             val boxedText = TextPostProcessor.normalizeTesseractText(buildFullTextFromBlocks(blocks))
+            
+            // Логируем для диагностики
+            val rawWordCount = countWords(rawText)
+            val boxedWordCount = countWords(boxedText)
+            val rawLines = rawText.lines().count { it.isNotBlank() }
+            val boxedLines = boxedText.lines().count { it.isNotBlank() }
+            
+            Log.d(TAG, "PSM=${selectPsm(safeBitmap)} rawWords=$rawWordCount boxedWords=$boxedWordCount rawLines=$rawLines boxedLines=$boxedLines")
+            Log.d(TAG, "rawText preview: ${rawText.take(200)}")
+            Log.d(TAG, "boxedText preview: ${boxedText.take(200)}")
+            
             val fullText = chooseBestText(rawText, boxedText)
+            val selected = if (fullText == rawText) "raw" else "boxed"
+            Log.d(TAG, "Selected: $selected")
+            Log.d(TAG, "fullText preview: ${fullText.take(200)}")
             
             // Применяем постобработку для русского текста
             val postProcessedText = RussianPostProcessor.process(fullText)
             val metrics = RussianPostProcessor.analyzeQuality(fullText, postProcessedText)
             Log.d(TAG, "Russian post-processing: $metrics")
+            Log.d(TAG, "postProcessed preview: ${postProcessedText.take(200)}")
             
             val avgConf = if (cleanedWords.isNotEmpty()) {
                 cleanedWords.map { it.confidence / 100f }.average().toFloat()
@@ -777,12 +819,38 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         val ratio = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
         if (ratio !in 1.15f..2.35f) return false
 
+        // Признаки структурированного документа (водительские права, паспорт, ID)
         val dateCount = Regex("""\d{2}[.\s]\d{2}[.\s]\d{4}""").findAll(text).count()
         val fieldCount = Regex("""(?i)(?:^|\s)\d+[a-z]?[.)]?""").findAll(text).count()
         val hasLatin = text.any { it in 'A'..'Z' || it in 'a'..'z' }
         val hasCyrillic = text.any { it.code in 0x0400..0x04FF }
-
-        return dateCount >= 2 || fieldCount >= 3 || (dateCount >= 1 && hasLatin && hasCyrillic)
+        
+        // Признаки обычного многострочного документа (домашнее задание, конспект, статья)
+        val lineCount = text.lines().count { it.isNotBlank() }
+        val avgLineLength = if (lineCount > 0) {
+            text.lines().filter { it.isNotBlank() }.map { it.length }.average()
+        } else 0.0
+        
+        val hasUrl = text.contains(Regex("""https?://"""))
+        val hasLongParagraphs = text.split("\n\n").any { it.length > 100 }
+        val wordCount = text.split(Regex("""\s+""")).count { it.length > 2 }
+        val hasNarrativeText = avgLineLength > 40 && wordCount > 30
+        
+        // Если это явно обычный документ с текстом - НЕ применяем structured pass
+        if (hasNarrativeText || hasUrl || hasLongParagraphs || lineCount >= 6) {
+            Log.d(TAG, "Skipping structured pass: narrative=$hasNarrativeText, url=$hasUrl, " +
+                      "longPara=$hasLongParagraphs, lines=$lineCount")
+            return false
+        }
+        
+        // Если это явно структурированный документ - применяем structured pass
+        val isStructured = dateCount >= 2 || fieldCount >= 3 || (dateCount >= 1 && hasLatin && hasCyrillic)
+        
+        if (isStructured) {
+            Log.d(TAG, "Applying structured pass: dates=$dateCount, fields=$fieldCount")
+        }
+        
+        return isStructured
     }
 
     private fun isArmTranslationRuntime(): Boolean {

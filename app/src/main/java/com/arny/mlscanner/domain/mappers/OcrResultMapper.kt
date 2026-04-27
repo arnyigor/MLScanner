@@ -31,11 +31,11 @@ class OcrResultMapper(
      * Применяет форматирование текста и определяет язык.
      */
     fun toRecognizedText(ocrResult: OcrResult): RecognizedText {
+        // Форматируем текст и распознаём паттерны
         val formatted = DisplayTextFormatter.format(
             ocrResult.fullText,
             DisplayTextFormatter.FormatMode.RAW
         )
-        val patterns = PatternRecognizer.recognizeAll(ocrResult.fullText)
 
         val blockInfos = ocrResult.blocks.map { block ->
             TextBlockInfo(
@@ -58,7 +58,7 @@ class OcrResultMapper(
             blocks = blockInfos,
             confidence = ocrResult.averageConfidence,
             detectedLanguage = ocrResult.detectedLanguage,
-            recognizedPatterns = patterns,
+            recognizedPatterns = formatted.patterns,  // Используем паттерны из formatted
             formatMode = formatted.mode
         )
     }

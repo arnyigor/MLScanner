@@ -16,9 +16,15 @@ data class TesseractProfile(
 ) {
     companion object {
         /**
-         * Профили для русского текста (документы, чеки, страницы).
+         * Профили для русского текста (документы, многострочные страницы).
+         * 
+         * Эти профили сохраняют reading order и подходят для:
+         * - домашних заданий
+         * - конспектов
+         * - обычных документов
+         * - страниц с несколькими строками текста
          */
-        val RUSSIAN_PROFILES = listOf(
+        val RUSSIAN_DOCUMENT_PROFILES = listOf(
             TesseractProfile(
                 name = "rus_auto_original",
                 language = TesseractLanguage.RUS_ONLY,
@@ -42,7 +48,16 @@ data class TesseractProfile(
                 language = TesseractLanguage.RUS_ONLY,
                 psm = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK,
                 preprocessMode = PreprocessMode.CONTRAST_ENHANCED
-            ),
+            )
+        )
+
+        /**
+         * Профили для хаотичного текста (чеки, билеты, разрозненные поля).
+         * 
+         * PSM_SPARSE_TEXT ищет текст "in no particular order" (Tesseract docs).
+         * Используйте только для документов, где порядок не важен.
+         */
+        val RUSSIAN_SPARSE_PROFILES = listOf(
             TesseractProfile(
                 name = "rus_sparse_adaptive",
                 language = TesseractLanguage.RUS_ONLY,
@@ -50,6 +65,16 @@ data class TesseractProfile(
                 preprocessMode = PreprocessMode.ADAPTIVE_THRESHOLD
             )
         )
+
+        /**
+         * Все русские профили (для обратной совместимости).
+         * @deprecated Используйте RUSSIAN_DOCUMENT_PROFILES или RUSSIAN_SPARSE_PROFILES
+         */
+        @Deprecated(
+            "Use RUSSIAN_DOCUMENT_PROFILES for multi-line documents or RUSSIAN_SPARSE_PROFILES for receipts",
+            ReplaceWith("RUSSIAN_DOCUMENT_PROFILES")
+        )
+        val RUSSIAN_PROFILES = RUSSIAN_DOCUMENT_PROFILES
 
         /**
          * Профили для английского текста.

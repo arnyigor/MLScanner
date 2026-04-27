@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter
 import com.arny.mlscanner.data.preprocessing.ImagePreprocessor
 import com.arny.mlscanner.domain.models.ScanSettings
 import com.arny.mlscanner.domain.models.OcrEngineType
@@ -26,6 +27,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import androidx.core.graphics.scale
 
 class ScanViewModel(
     private val recognizeTextUseCase: RecognizeTextUseCase,
@@ -164,19 +166,19 @@ class ScanViewModel(
         }
     }
     
-    fun onPatternClick(action: com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.ClickAction) {
+    fun onPatternClick(action: TextFormatter.ClickAction) {
         viewModelScope.launch {
             when (action) {
-                is com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.ClickAction.Call -> {
+                is TextFormatter.ClickAction.Call -> {
                     _events.send(ScanUiEvent.CallPhone(action.phoneNumber))
                 }
-                is com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.ClickAction.SendEmail -> {
+                is TextFormatter.ClickAction.SendEmail -> {
                     _events.send(ScanUiEvent.SendEmail(action.email))
                 }
-                is com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.ClickAction.OpenUrl -> {
+                is TextFormatter.ClickAction.OpenUrl -> {
                     _events.send(ScanUiEvent.OpenUrl(action.url))
                 }
-                is com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.ClickAction.CopyToClipboard -> {
+                is TextFormatter.ClickAction.CopyToClipboard -> {
                     _events.send(ScanUiEvent.CopyToClipboard(action.text))
                 }
             }
@@ -225,20 +227,23 @@ class ScanViewModel(
     }
 
     private suspend fun performScanning(originalBitmap: Bitmap) {
+        Log.d(TAG, "Starting performScanning process")
         try {
             val state = _uiState.value
             val settings = state.settings
 
             updateProgress(0.1f, "Cropping image...")
+            Log.d(TAG, "Applying crop rect: ${state.cropRect}")
             val cropped = applyCrop(originalBitmap, state.cropRect)
 
             _uiState.update { it.copy(resultBitmap = cropped) }
 
             if (settings.engineType == OcrEngineType.BARCODE) {
+                Log.i(TAG, "Engine type is BARCODE. Scanning for barcodes...")
                 updateProgress(0.5f, "Scanning for barcodes...")
                 val barcodeUseCase = scanBarcodeUseCase
                 if (barcodeUseCase == null) {
-                    Log.w(TAG, "Barcode scanning not available")
+                    Log.w(TAG, "Barcode scanning not available: barcodeUseCase is null")
                     _uiState.update {
                         it.copy(
                             step = ScanStep.PREPROCESSING,
@@ -251,23 +256,21 @@ class ScanViewModel(
 
                 try {
                     val barcodes = barcodeUseCase(cropped)
+                    Log.d(TAG, "Barcode scan completed. Found: ${barcodes.size} barcodes")
+
                     if (barcodes.isNotEmpty()) {
                         val barcode = barcodes.first()
-                        
-                        // Форматируем результат баркода
+
                         val formattedText = buildString {
                             append("Формат: ${barcode.format.name}\n\n")
                             append("Результат:\n${barcode.rawValue}")
-                            
-                            // Добавляем дополнительную информацию если есть
                             barcode.parsedContent?.let { content ->
                                 append("\n\nТип: ${barcode.contentType.name}")
                             }
                         }
-                        
-                        // Распознаём паттерны в баркоде
+
                         val patterns = com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer.recognizeAll(barcode.rawValue)
-                        
+
                         val recognized = RecognizedText(
                             originalText = barcode.rawValue,
                             formattedText = formattedText,
@@ -277,6 +280,8 @@ class ScanViewModel(
                             recognizedPatterns = patterns,
                             formatMode = com.arny.mlscanner.data.ocr.postprocessing.TextFormatter.FormatMode.RAW
                         )
+
+                        Log.i(TAG, "Barcode successfully recognized and formatted")
                         updateProgress(1.0f, "Done!")
                         _uiState.update {
                             it.copy(
@@ -287,7 +292,7 @@ class ScanViewModel(
                             )
                         }
                     } else {
-                        Log.w(TAG, "No barcodes found")
+                        Log.w(TAG, "No barcodes found in the cropped image")
                         _uiState.update {
                             it.copy(
                                 step = ScanStep.PREPROCESSING,
@@ -298,7 +303,7 @@ class ScanViewModel(
                         _events.send(ScanUiEvent.ShowError("Баркод не найден"))
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Barcode scanning error", e)
+                    Log.e(TAG, "Error during barcode scanning execution", e)
                     _uiState.update {
                         it.copy(
                             step = ScanStep.PREPROCESSING,
@@ -311,37 +316,50 @@ class ScanViewModel(
                 return
             }
 
+            // --- OCR PATH ---
+            Log.i(TAG, "Engine type is OCR. Starting text recognition pipeline")
             updateProgress(0.2f, "Optimizing resolution...")
             val (scaled, needsForceBinarize) = scaleForOcr(cropped)
+            Log.d(TAG, "Image scaled. needsForceBinarize: $needsForceBinarize")
 
             updateProgress(0.3f, "Applying filters...")
             val actualSettings = if (needsForceBinarize && !settings.binarizationEnabled) {
+                Log.d(TAG, "Forcing binarization due to scale requirements")
                 settings.copy(binarizationEnabled = true)
             } else {
                 settings
             }
             var processed = imagePreprocessor.applyFiltersOnly(scaled, actualSettings)
+            Log.d(TAG, "Filters applied using settings: $actualSettings")
 
             updateProgress(0.5f, "Recognizing text...")
+            Log.d(TAG, "Executing recognizeTextUseCase first attempt")
             var result = recognizeTextUseCase.execute(processed, actualSettings)
 
             if (result.exceptionOrNull() is OcrError.NoTextFound) {
+                Log.i(TAG, "No text found. Attempting retry with stronger filters...")
                 updateProgress(0.65f, "Retrying with stronger filters...")
+
                 val retrySettings = actualSettings.copy(
                     contrastLevel = maxOf(actualSettings.contrastLevel, 1.8f),
                     sharpenLevel = maxOf(actualSettings.sharpenLevel, 0.8f),
                     denoiseEnabled = true,
                     binarizationEnabled = true
                 )
+
                 val retryProcessed = imagePreprocessor.applyFiltersOnly(scaled, retrySettings)
+
                 if (processed !== scaled && processed !== originalBitmap) {
                     safeRecycle(processed)
                 }
+
                 processed = retryProcessed
+                Log.d(TAG, "Executing recognizeTextUseCase second attempt with retrySettings")
                 result = recognizeTextUseCase.execute(processed, retrySettings)
             }
 
             if (result.isSuccess) {
+                Log.i(TAG, "OCR successfully recognized text")
                 val recognized = result.getOrNull()
                 updateProgress(1.0f, "Done!")
 
@@ -357,7 +375,6 @@ class ScanViewModel(
                 val exception = result.exceptionOrNull()
                 val errorMsg = when (exception) {
                     is com.arny.mlscanner.domain.models.errors.OcrError -> {
-                        // Детальное сообщение для OcrError
                         buildString {
                             append(exception.displayMessage.toString())
                             exception.cause?.let { cause ->
@@ -365,9 +382,8 @@ class ScanViewModel(
                                 append(cause.javaClass.simpleName)
                                 append(": ")
                                 append(cause.message ?: "No message")
-                                
-                                // Добавляем stacktrace для отладки
-                                val stackTrace = cause.stackTrace.take(5).joinToString("\n") { 
+
+                                val stackTrace = cause.stackTrace.take(5).joinToString("\n") {
                                     "  at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})"
                                 }
                                 if (stackTrace.isNotEmpty()) {
@@ -379,10 +395,9 @@ class ScanViewModel(
                     }
                     else -> exception?.message ?: "Unknown error"
                 }
-                
+
                 Log.e(TAG, "OCR failed: $errorMsg", exception)
-                
-                // Возвращаемся на экран настроек при ошибке
+
                 _uiState.update {
                     it.copy(
                         step = ScanStep.PREPROCESSING,
@@ -391,27 +406,30 @@ class ScanViewModel(
                         error = ScanError.OcrFailed(errorMsg)
                     )
                 }
-                
             }
 
+            // Final memory cleanup
+            Log.v(TAG, "Cleaning up bitmaps. scaled: $scaled, processed: $processed")
             if (scaled !== cropped && scaled !== originalBitmap) safeRecycle(scaled)
             if (processed !== scaled && processed !== originalBitmap) safeRecycle(processed)
 
-        } catch (_: CancellationException) {
+        } catch (ce: CancellationException) {
+            Log.i(TAG, "Scanning cancelled by coroutine cancellation")
             _uiState.update { it.copy(step = ScanStep.PREPROCESSING, isScanning = false) }
+            throw ce // Важно пробросить CancellationException
         } catch (e: Exception) {
-            Log.e(TAG, "Scanning error", e)
-            
+            Log.e(TAG, "Unexpected scanning error", e)
+
             val detailedError = buildString {
                 append(e.javaClass.simpleName)
                 append(": ")
                 append(e.message ?: "No message")
                 append("\n\nStacktrace:\n")
-                append(e.stackTrace.take(10).joinToString("\n") { 
+                append(e.stackTrace.take(10).joinToString("\n") {
                     "  at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})"
                 })
             }
-            
+
             _uiState.update {
                 it.copy(
                     step = ScanStep.PREPROCESSING,
@@ -422,6 +440,7 @@ class ScanViewModel(
             }
         }
     }
+
 
     private fun applyCrop(source: Bitmap, crop: CropRect?): Bitmap {
         if (crop == null) return source
@@ -476,7 +495,7 @@ class ScanViewModel(
         val newW = (w * ratio).toInt().coerceAtLeast(1)
         val newH = (h * ratio).toInt().coerceAtLeast(1)
 
-        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+        val scaled = bitmap.scale(newW, newH)
 
         return if (scaled.config != Bitmap.Config.ARGB_8888) {
             val copy = scaled.copy(Bitmap.Config.ARGB_8888, false)

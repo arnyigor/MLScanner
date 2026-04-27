@@ -195,6 +195,9 @@ object AdaptiveProfileSelector {
     
     /**
      * Выбирает оптимальный PSM на основе метрик.
+     * 
+     * ВАЖНО: PSM_SPARSE_TEXT не гарантирует reading order (Tesseract docs).
+     * Используем его только для хаотичных документов (чеки, билеты).
      */
     private fun selectPSM(metrics: ImageMetrics): Int {
         val ratio = metrics.aspectRatio
@@ -213,15 +216,11 @@ object AdaptiveProfileSelector {
                 com.googlecode.tesseract.android.TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
             }
             
-            // Низкая плотность текста → sparse
-            metrics.textDensity < 0.3f -> {
-                Log.d(TAG, "PSM: SPARSE_TEXT (density=${"%.2f".format(metrics.textDensity)})")
-                com.googlecode.tesseract.android.TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
-            }
-            
-            // Стандартный случай
+            // Стандартный случай: PSM_AUTO для многострочных документов
+            // PSM_SPARSE_TEXT больше не используется по умолчанию,
+            // т.к. он ломает reading order
             else -> {
-                Log.d(TAG, "PSM: AUTO")
+                Log.d(TAG, "PSM: AUTO (density=${"%.2f".format(metrics.textDensity)})")
                 com.googlecode.tesseract.android.TessBaseAPI.PageSegMode.PSM_AUTO
             }
         }

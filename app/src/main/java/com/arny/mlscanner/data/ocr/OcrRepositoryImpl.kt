@@ -121,7 +121,7 @@ class OcrRepositoryImpl(
     ): OcrResult {
         val profiles = when (settings.language) {
             com.arny.mlscanner.domain.models.OcrLanguage.RUSSIAN -> 
-                com.arny.mlscanner.data.ocr.engine.TesseractProfile.RUSSIAN_PROFILES
+                com.arny.mlscanner.data.ocr.engine.TesseractProfile.RUSSIAN_DOCUMENT_PROFILES
             com.arny.mlscanner.domain.models.OcrLanguage.ENGLISH -> 
                 com.arny.mlscanner.data.ocr.engine.TesseractProfile.ENGLISH_PROFILES
             com.arny.mlscanner.domain.models.OcrLanguage.RUSSIAN_ENGLISH -> 
