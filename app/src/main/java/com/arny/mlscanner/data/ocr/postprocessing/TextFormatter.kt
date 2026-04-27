@@ -314,28 +314,50 @@ private fun preprocessUrlLikeLine(line: String): String {
             .joinToString("")
     }
 
-    private fun isUrlContinuationToken(token: String): Boolean {
+private fun isUrlContinuationToken(token: String): Boolean {
         if (token.length > 80) return false
         // Нормализуем токен (конвертируем кириллицу в латиницу) перед проверкой
         val normalized = normalizeUrlToken(token)
+        
         // Проверяем что нормализованный токен соответствует URL символам
-        return normalized.matches(Regex("""[A-Za-z0-9._~?#@!$&()*+,;=%-а-яА-ЯёЁ]+"""))
+        if (!normalized.matches(Regex("""[A-Za-z0-9._~?#@!$&()*+,;=%-а-яА-ЯёЁ]+"""))) {
+            return false
+        }
+        
+        // Разрешаем продолжение если токен:
+        // 1. Содержит спецсимволы URL (. ~ ? # @ ! $ & ( ) * + , ; = % - / :)
+        // 2. Является числовым сегментом
+        // 3. Содержит ТОЛЬКО буквы (может быть словом пути) - но это обрабатывается контекстно
+        
+        val hasSpecificUrlChars = normalized.any { it in "._~?#@!$&()*+,;=%-:/-" }
+        val isNumericSegment = normalized.all(Char::isDigit)
+        val isWordSegment = normalized.all { it in 'A'..'Z' || it in 'a'..'z' || it in 'а'..'я' || it in 'А'..'Я' }
+        
+        // Буквенные токены (video, preview, next) разрешаем,
+        // но только если предыдущий токен заканчивается на / или numeric path segment
+        // Это позволяет: "https://yandex.ru video 123" -> "https://yandex.ru/video/123"
+        // Но запрещает: "https://example.com next words" -> "https://example.com"
+        // Проверка контекста будет в normalizeUrlLikeLine через previous token
+        
+        return hasSpecificUrlChars || isNumericSegment || isWordSegment
     }
 
-    private fun trimNonUrlTrailingTokens(tokens: List<String>): List<String> {
-        // Находим последний токен, который содержит хотя бы один символ из URL-специфичных
-        // включая цифры, точки, тире и другие символы
+private fun trimNonUrlTrailingTokens(tokens: List<String>): List<String> {
+        // Находим последний токен, который содержит URL-специфичные символы или цифры
+        // Исключаем токены с ТОЛЬКО буквами (обычные слова)
         val lastAnchorIndex = tokens.indexOfLast { token ->
-            // Кириллица считается валидным продолжением URL (например, домены .рф)
-            val hasCyrillic = token.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
-            val hasUrlChars = token.any { it in "._~?#@!$&()*+,;=%-" }
-            val hasDigits = token.any(Char::isDigit)
-            hasCyrillic || hasUrlChars || hasDigits
+            // Нормализуем для проверки
+            val normalized = normalizeUrlToken(token)
+            // Принимаем если есть спецсимволы ИЛИ цифры
+            // Отклоняем если только буквы (обычные слова типа "next", "words")
+            val hasUrlChars = normalized.any { it in "._~?#@!$&()*+,;=%-:/-" }
+            val hasDigits = normalized.any(Char::isDigit)
+            hasUrlChars || hasDigits
         }
 
         return if (lastAnchorIndex <= 0) {
-            // Если нет явных URL токенов, берём все токены начиная с первого URL
-            tokens
+            // Если нет явных URL токенов, берём только первый токен (URL)
+            listOf(tokens.first())
         } else {
             tokens.take(lastAnchorIndex + 1)
         }
