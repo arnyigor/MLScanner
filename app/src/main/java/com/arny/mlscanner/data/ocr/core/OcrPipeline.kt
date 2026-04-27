@@ -53,10 +53,15 @@ class OcrPipeline(
                 )
             }
             
-            // 4. Постобработка каждого кандидата
+// 4. Постобработка каждого кандидата
+            Log.d(TAG, "=== POST-PROCESSING START ===")
+            Log.d(TAG, "Raw text from engine: ${candidates.firstOrNull()?.rawText?.take(200)}...")
             val processed = candidates.map { candidate ->
-                processCandidate(candidate, request)
+                val result = processCandidate(candidate, request)
+                Log.d(TAG, "After postprocessing: ${result.processedText.take(200)}...")
+                result
             }
+            Log.d(TAG, "=== POST-PROCESSING END ===")
             
             // 5. Анализ качества
             val analyzed = processed.map { candidate ->

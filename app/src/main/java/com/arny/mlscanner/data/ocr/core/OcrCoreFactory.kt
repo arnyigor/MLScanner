@@ -87,19 +87,22 @@ class OcrCoreFactory(private val context: Context) {
         return registry
     }
     
-    /**
+/**
      * Создаёт список постпроцессоров в правильном порядке.
      */
     private fun createPostProcessors(): List<IOcrPostProcessor> {
         return listOf(
             // 1. Сначала исправляем визуальные замены (Latin→Cyrillic)
             RussianPostProcessorAdapter(),
-            
-            // 2. Нормализуем даты и суммы
+
+            // 2. Восстанавливаем латиницу в URL после RussianPostProcessor
+            UrlLatinRestorer(),
+
+            // 3. Нормализуем даты и суммы
             DateNormalizer(),
             AmountNormalizer(),
-            
-            // 3. Нормализуем пробелы и переносы
+
+            // 4. Нормализуем пробелы и переносы
             WhitespaceNormalizer(),
             LineBreakNormalizer()
         )

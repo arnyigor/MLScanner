@@ -146,7 +146,53 @@ object TextFormatter {
             .replace(Regex("""(?<=\w)[ \t]*/[ \t]*(?=\w)"""), "/")
             .replace(Regex("""(?i)(https?://\S*/\d+)[ \t]*\n[ \t]*(\d+)\b"""), "$1$2")
 
-        return normalized.lines().joinToString("\n") { normalizeUrlLikeLine(it) }
+        return normalized.lines().joinToString("\n") { line ->
+            // Проверяем наличие URL-подобного текста без протокола
+            val preprocessed = preprocessUrlLikeLine(line)
+            normalizeUrlLikeLine(preprocessed)
+        }
+    }
+
+    /**
+     * Предобработка строки для поиска URL-подобных паттернов без протокола.
+     * Например: "https://yandex.ru/video/preview/160421091605\n16050498"
+     * Превращается в: "https://yandex.ru/video/preview/16042109160516050498"
+     */
+    private fun preprocessUrlLikeLine(line: String): String {
+        // Паттерн: строка с URL-like доменом и цифрами после переноса
+        // Например: "yandex.ru/video/preview/160421091605" на одной строке
+        // и "16050498" на следующей - это один URL
+        
+        // Если строка содержит домен и путь но не протокол, добавляем https://
+        val domainUrlPattern = Regex("""
+            (?i)                       # Case insensitive
+            (                          # Группа 1: префикс с протоколом (опционально)
+              (https?://)?             # Протокол (опционально)
+              (www\.)?                 # www (опционально)
+            )
+            ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,})  # Домен
+            (/[^\s]*)?                 # Путь (опционально, до первого пробела/переноса)
+        """.trimIndent())
+
+        val urlMatch = domainUrlPattern.find(line)
+        if (urlMatch != null) {
+            val prefix = urlMatch.groups[1]?.value ?: ""
+            val domain = urlMatch.groups[4]?.value ?: ""
+            val path = urlMatch.groups[5]?.value ?: ""
+            
+            // Если протокола нет, добавляем https://
+            if (prefix.isEmpty() || !prefix.contains("://")) {
+                val start = urlMatch.range.first
+                val beforeUrl = line.substring(0, start)
+                val afterUrl = line.substring(urlMatch.range.last + 1)
+                
+                // Склеиваем: убираем пробелы между доменом/путём и цифрами после
+                val reconstructedUrl = "https://${domain}${path}"
+                return beforeUrl + reconstructedUrl + afterUrl
+            }
+        }
+        
+        return line
     }
 
     private fun normalizeUrlLikeLine(line: String): String {
@@ -207,16 +253,26 @@ object TextFormatter {
 
     private fun isUrlContinuationToken(token: String): Boolean {
         if (token.length > 80) return false
-        return token.matches(Regex("""[A-Za-z0-9._~?#@!$&()*+,;=%-]+"""))
+        // Нормализуем токен (конвертируем кириллицу в латиницу) перед проверкой
+        val normalized = normalizeUrlToken(token)
+        // Проверяем что нормализованный токен соответствует URL символам
+        return normalized.matches(Regex("""[A-Za-z0-9._~?#@!$&()*+,;=%-а-яА-ЯёЁ]+"""))
     }
 
     private fun trimNonUrlTrailingTokens(tokens: List<String>): List<String> {
+        // Находим последний токен, который содержит хотя бы один символ из URL-специфичных
+        // включая цифры, точки, тире и другие символы
         val lastAnchorIndex = tokens.indexOfLast { token ->
-            token.any(Char::isDigit) || token.any { it in "._~?#@!$&()*+,;=%-" }
+            // Кириллица считается валидным продолжением URL (например, домены .рф)
+            val hasCyrillic = token.any { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
+            val hasUrlChars = token.any { it in "._~?#@!$&()*+,;=%-" }
+            val hasDigits = token.any(Char::isDigit)
+            hasCyrillic || hasUrlChars || hasDigits
         }
 
         return if (lastAnchorIndex <= 0) {
-            tokens.take(1)
+            // Если нет явных URL токенов, берём все токены начиная с первого URL
+            tokens
         } else {
             tokens.take(lastAnchorIndex + 1)
         }
@@ -227,13 +283,19 @@ object TextFormatter {
             append(tokens.first())
             var previous = tokens.first()
             tokens.drop(1).forEach { token ->
-                if (token.all(Char::isDigit) && hasTrailingNumericPathSegment(previous)) {
-                    append(token)
+                val normalizedToken = normalizeUrlToken(token)
+                // Если токен содержит только цифры И предыдущий токен заканчивается на числовой сегмент,
+                // добавляем токен напрямую (склеиваем числа без разделителя)
+                if (normalizedToken.all(Char::isDigit) && hasTrailingNumericPathSegment(previous)) {
+                    append(normalizedToken)
                 } else {
-                    append('/')
-                    append(token)
+                    // Добавляем разделитель / между токенами
+                    if (!endsWith("/")) {
+                        append('/')
+                    }
+                    append(normalizedToken)
                 }
-                previous = token
+                previous = token // Используем оригинальный токен для проверки
             }
         }
     }

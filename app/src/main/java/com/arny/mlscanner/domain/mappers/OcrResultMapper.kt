@@ -4,6 +4,7 @@
 // ============================================================
 package com.arny.mlscanner.domain.mappers
 
+import android.util.Log
 import com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer
 import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter as DisplayTextFormatter
 import com.arny.mlscanner.domain.formatters.TextFormatter as BlockTextFormatter
@@ -25,17 +26,30 @@ class OcrResultMapper(
     private val textFormatter: BlockTextFormatter = BlockTextFormatter()
 ) {
 
+    companion object {
+        private const val TAG = "OcrResultMapper"
+    }
+
     /**
      * OcrResult → RecognizedText (для UI слоя).
      *
      * Применяет форматирование текста и определяет язык.
      */
     fun toRecognizedText(ocrResult: OcrResult): RecognizedText {
+        Log.d(TAG, "=== OcrResultMapper INPUT ===")
+        Log.d(TAG, "fullText: ${ocrResult.fullText.take(300)}")
+        Log.d(TAG, "engine: ${ocrResult.engineName}")
+
         // Форматируем текст и распознаём паттерны
         val formatted = DisplayTextFormatter.format(
             ocrResult.fullText,
             DisplayTextFormatter.FormatMode.RAW
         )
+
+        Log.d(TAG, "Detected patterns: ${formatted.patterns.size}")
+        formatted.patterns.forEach { pattern ->
+            Log.d(TAG, "  Pattern: ${pattern.type} = '${pattern.value}'")
+        }
 
         val blockInfos = ocrResult.blocks.map { block ->
             TextBlockInfo(
@@ -52,7 +66,7 @@ class OcrResultMapper(
             )
         }
 
-        return RecognizedText(
+return RecognizedText(
             originalText = ocrResult.fullText,
             formattedText = formatted.text,
             blocks = blockInfos,
@@ -60,7 +74,10 @@ class OcrResultMapper(
             detectedLanguage = ocrResult.detectedLanguage,
             recognizedPatterns = formatted.patterns,  // Используем паттерны из formatted
             formatMode = formatted.mode
-        )
+        ).also {
+            Log.d(TAG, "=== OcrResultMapper OUTPUT ===")
+            Log.d(TAG, "recognizedPatterns: ${it.recognizedPatterns.size}")
+        }
     }
 
     /**
