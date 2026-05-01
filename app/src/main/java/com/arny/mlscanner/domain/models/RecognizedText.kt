@@ -72,8 +72,10 @@ data class RecognizedText(
 
 /** Применить сырой текст и пересчитать форматированный вывод/паттерны. */
     fun applyRawText(newText: String): RecognizedText {
+        android.util.Log.d("RecognizedText", "applyRawText: text=${newText.take(100)}")
         // Всегда используем RAW режим для распознавания паттернов при редактировании
         val formatted = TextFormatter.format(newText, TextFormatter.FormatMode.RAW)
+        android.util.Log.d("RecognizedText", "applyRawText: found ${formatted.patterns.size} patterns: ${formatted.patterns.map { "${it.type}:${it.value}" }}")
 
         return copy(
             originalText = newText,

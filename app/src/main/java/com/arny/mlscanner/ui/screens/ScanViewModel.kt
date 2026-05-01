@@ -49,8 +49,10 @@ class ScanViewModel(
     private val _events = Channel<ScanUiEvent>(Channel.BUFFERED)
     val events: Flow<ScanUiEvent> = _events.receiveAsFlow()
 
-    private var originalBitmap: Bitmap? = null
+private var originalBitmap: Bitmap? = null
     private var previewSourceBitmap: Bitmap? = null
+    // ▶ FIX: Сохраняем исходный preview для возможности восстановления
+    private var originalPreviewBitmap: Bitmap? = null
 
     private var filterJob: Job? = null
     private var scanJob: Job? = null
@@ -63,12 +65,16 @@ fun onImageCaptured(bitmap: Bitmap) {
         originalBitmap = bitmap
         val preview = scaleBitmapSafe(bitmap, PREVIEW_MAX_DIMENSION)
         previewSourceBitmap = preview
+        // ▶ FIX: Сохраняем оригинальный preview для восстановления
+        originalPreviewBitmap = preview.copy(Bitmap.Config.ARGB_8888, false)
+
+        Log.d(TAG, "onImageCaptured: preview=${preview.width}x${preview.height}")
 
         _uiState.update {
             it.copy(
                 step = ScanStep.PREPROCESSING,
                 previewBitmap = preview,
-originalImageSize = ImageSize(bitmap.width, bitmap.height),
+                originalImageSize = ImageSize(bitmap.width, bitmap.height),
                 error = null,
                 recognizedText = null
             )
@@ -138,8 +144,27 @@ originalImageSize = ImageSize(bitmap.width, bitmap.height),
         _uiState.value = ScanUiState()
     }
 
-    fun onReturnToPreprocessing() {
-        _uiState.update { it.copy(step = ScanStep.PREPROCESSING) }
+fun onReturnToPreprocessing() {
+        android.util.Log.d("ScanViewModel", "onReturnToPreprocessing: previewBitmap=${_uiState.value.previewBitmap != null}, previewSourceBitmap=${previewSourceBitmap != null}, originalPreviewBitmap=${originalPreviewBitmap != null}")
+        // ▶ FIX: Убедимся что previewBitmap восстановлен из резервных копий если он null
+        val currentPreview = _uiState.value.previewBitmap
+        val restoredPreview = when {
+            currentPreview != null -> currentPreview
+            previewSourceBitmap != null -> previewSourceBitmap
+            originalPreviewBitmap != null -> originalPreviewBitmap
+            else -> null
+        }
+
+        android.util.Log.d("ScanViewModel", "Restored preview: ${restoredPreview != null}")
+
+        _uiState.update {
+            it.copy(
+                step = ScanStep.PREPROCESSING,
+                previewBitmap = restoredPreview,
+                isScanning = false,
+                processingProgress = 0f
+            )
+        }
     }
 
     fun onTextEdited(newText: String) {
@@ -544,17 +569,20 @@ originalImageSize = ImageSize(bitmap.width, bitmap.height),
         }
     }
 
-    private fun clearBitmaps() {
+private fun clearBitmaps() {
         filterJob?.cancel()
         scanJob?.cancel()
         val state = _uiState.value
-        if (state.resultBitmap != null && 
-            state.resultBitmap !== originalBitmap && 
+        if (state.resultBitmap != null &&
+            state.resultBitmap !== originalBitmap &&
             !state.resultBitmap.isRecycled) {
             state.resultBitmap.recycle()
         }
         originalBitmap = null
         previewSourceBitmap = null
+        // ▶ FIX: Очищаем originalPreviewBitmap
+        originalPreviewBitmap?.let { if (!it.isRecycled) it.recycle() }
+        originalPreviewBitmap = null
     }
 
     /**

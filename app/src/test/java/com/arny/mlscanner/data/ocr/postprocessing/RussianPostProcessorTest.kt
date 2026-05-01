@@ -31,7 +31,7 @@ class RussianPostProcessorTest {
         
         // MOCKBA не исправится, т.к. это отдельное слово без кириллицы
         // Это правильное поведение - мы не трогаем чисто латинские слова
-        assertTrue(result.contains("Город"))
+        assertTrue(result.contains(expected))
     }
     
     @Test

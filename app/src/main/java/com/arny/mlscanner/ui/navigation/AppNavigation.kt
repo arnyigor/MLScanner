@@ -241,16 +241,28 @@ fun AppNavigation(
             )
         }
 
-        // ─── Result ───
+// ─── Result ───
         composable(Screen.Result.route) {
             val recognizedText = uiState.recognizedText
+            val previewBitmap = uiState.previewBitmap
+
+            // DEBUG: Логируем состояние для диагностики
+            android.util.Log.d("AppNavigation", "Result screen: previewBitmap=${previewBitmap != null}, recognizedText=${recognizedText != null}")
+
             if (recognizedText != null) {
                 ResultScreen(
                     recognizedText = recognizedText,
                     resultBitmap = uiState.resultBitmap,
                     onBack = {
+                        // ▶ FIX: Возврат на Preprocessing с сохранением состояния
                         viewModel.onReturnToPreprocessing()
-                        navController.popBackStack()
+                        // Явно переходим на Preprocessing, а не просто popBackStack
+                        navController.navigate(Screen.Preprocessing.route) {
+                            // Удаляем Result из back stack
+                            popUpTo(Screen.Result.route) { inclusive = true }
+                            // Избегаем создания дубликатов
+                            launchSingleTop = true
+                        }
                     },
                     onNewScan = {
                         viewModel.onNewScan()

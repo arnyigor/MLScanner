@@ -144,8 +144,9 @@ fun com.arny.mlscanner.domain.models.ScanSettings.toOcrRequest(
         bitmap = bitmap,
         language = this.language,
         taskType = OcrTaskType.GENERAL_TEXT,
-        enginePolicy = when (this.engineType) {
-            com.arny.mlscanner.domain.models.OcrEngineType.ML_KIT -> OcrEnginePolicy.GOOGLE_MLKIT_ONLY
+enginePolicy = when (this.engineType) {
+            // ▶ FIX: Используем HYBRID вместо ML_KIT_ONLY для fallback на Tesseract
+            com.arny.mlscanner.domain.models.OcrEngineType.ML_KIT -> OcrEnginePolicy.HYBRID
             com.arny.mlscanner.domain.models.OcrEngineType.TESSERACT -> OcrEnginePolicy.TESSERACT_ONLY
             com.arny.mlscanner.domain.models.OcrEngineType.HUAWEI_ML_KIT -> OcrEnginePolicy.HUAWEI_ONLY
             com.arny.mlscanner.domain.models.OcrEngineType.HYBRID -> OcrEnginePolicy.HYBRID

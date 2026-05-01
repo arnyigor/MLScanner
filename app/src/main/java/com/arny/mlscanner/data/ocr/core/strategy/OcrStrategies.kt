@@ -151,36 +151,53 @@ class AccurateStrategy(
 }
 
 /**
- * Стратегия: гибридная (ML Kit + Tesseract fallback).
+ * Стратегия: гибридная (Google ML Kit → Huawei ML Kit → Tesseract fallback).
+ * Порядок: Google (основной) → Huawei (fallback для эмуляторов) → Tesseract.
  */
 class HybridStrategy(
     engineRegistry: OcrEngineRegistry
 ) : BaseOcrStrategy(engineRegistry) {
-    
+
     override val id: String = "hybrid"
-    override val name: String = "Hybrid (ML Kit + Tesseract)"
-    
+    override val name: String = "Hybrid (Google → Huawei → Tesseract)"
+
     override suspend fun recognize(request: PreparedOcrRequest): List<OcrCandidate> {
         val candidates = mutableListOf<OcrCandidate>()
-        
-        // 1. Сначала Google ML Kit (быстрый)
+
+        // 1. Сначала Google ML Kit (основной, работает на реальных телефонах)
         val mlkitCandidate = recognizeWithEngine("google_mlkit", request)
         if (mlkitCandidate != null) {
             candidates.add(mlkitCandidate)
+            // Если результат хороший, возвращаем
+            if (mlkitCandidate.rawText.isNotBlank() &&
+                mlkitCandidate.rawText.split("\\s+".toRegex()).size >= 3) {
+                return candidates
+            }
         }
-        
-        // 2. Если результат подозрительный или пустой, добавляем Tesseract
-        val needsFallback = mlkitCandidate == null || 
-                           mlkitCandidate.rawText.isBlank() ||
-                           mlkitCandidate.rawText.split("\\s+".toRegex()).size < 3
-        
+
+        // 2. Если Google не дал результат (или упал), пробуем Huawei ML Kit
+        val huaweiCandidate = recognizeWithEngine("huawei_mlkit", request)
+        if (huaweiCandidate != null) {
+            candidates.add(huaweiCandidate)
+            // Если результат хороший, возвращаем
+            if (huaweiCandidate.rawText.isNotBlank() &&
+                huaweiCandidate.rawText.split("\\s+".toRegex()).size >= 3) {
+                return candidates
+            }
+        }
+
+        // 3. Если оба не дали результат, пробуем Tesseract
+        val needsFallback = (mlkitCandidate == null && huaweiCandidate == null) ||
+                (candidates.lastOrNull()?.rawText?.isBlank() == true) ||
+                (candidates.lastOrNull()?.rawText?.split("\\s+".toRegex())?.size ?: 0) < 3
+
         if (needsFallback) {
             val tessCandidate = recognizeWithEngine("tesseract", request)
             if (tessCandidate != null) {
                 candidates.add(tessCandidate)
             }
         }
-        
+
         return candidates
     }
 }

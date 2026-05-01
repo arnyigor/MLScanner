@@ -200,7 +200,8 @@ fun ResultScreen(
                 }
             }
 
-            val clickableElements = recognizedText.clickableElements
+val clickableElements = recognizedText.clickableElements
+            android.util.Log.d("ResultScreen", "clickableElements: ${clickableElements.map { "${it.type}:${it.value}" }}")
             if (clickableElements.isNotEmpty()) {
                 Column(
                     modifier = Modifier
