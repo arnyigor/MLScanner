@@ -2,6 +2,7 @@ package com.arny.mlscanner.data.barcode.analyzer
 
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.arny.mlscanner.data.barcode.engine.BarcodeEngine
@@ -37,6 +38,7 @@ class BarcodeCameraAnalyzer(
     @Volatile
     var isPaused: Boolean = false
 
+    @ExperimentalGetImage
     override fun analyze(imageProxy: ImageProxy) {
         val currentTimestamp = System.currentTimeMillis()
 
@@ -72,6 +74,7 @@ class BarcodeCameraAnalyzer(
         }
     }
 
+    @ExperimentalGetImage
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
         return try {
             when (imageProxy.format) {

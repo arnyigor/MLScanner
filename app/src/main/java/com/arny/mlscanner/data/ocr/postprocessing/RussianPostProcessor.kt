@@ -72,10 +72,11 @@ object RussianPostProcessor {
      * которые содержат преимущественно кириллицу.
      */
     private fun fixLatinInCyrillic(text: String): String {
+        val hasCyrillicContext = text.any { it in 'А'..'я' || it == 'Ё' || it == 'ё' }
         val words = text.split(Regex("\\b"))
         
         return words.joinToString("") { word ->
-            if (shouldFixWord(word)) {
+            if (shouldFixWord(word) || (hasCyrillicContext && shouldFixPureLatinWord(word))) {
                 fixWordLatinToCyrillic(word)
             } else {
                 word
@@ -95,6 +96,15 @@ object RussianPostProcessor {
         // Исправляем только если есть кириллица И есть латиница
         // Чисто латинские слова не трогаем (это может быть английский текст)
         return cyrillicCount > 0 && latinCount > 0
+    }
+
+    private fun shouldFixPureLatinWord(word: String): Boolean {
+        if (word.length < 2) return false
+
+        val latinLetters = word.filter { it in 'A'..'Z' || it in 'a'..'z' }
+        if (latinLetters.length != word.length) return false
+
+        return latinLetters.all { it in LATIN_TO_CYRILLIC }
     }
     
     /**

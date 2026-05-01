@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.arny.mlscanner.data.barcode.analyzer.BarcodeCameraAnalyzer
 import com.arny.mlscanner.data.barcode.engine.HybridBarcodeEngine
 import com.arny.mlscanner.data.barcode.engine.MLKitBarcodeEngine
@@ -198,7 +199,7 @@ fun CameraPreviewWithOverlay(
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-            }, ctx.mainExecutor)
+            }, ContextCompat.getMainExecutor(ctx))
 
             previewView
         },
