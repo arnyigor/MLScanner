@@ -10,13 +10,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Error
@@ -41,6 +46,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -179,6 +186,7 @@ fun PreprocessingScreen(
                 autoRotateEnabled = autoRotateEnabled,
                 binarizationEnabled = binarizationEnabled,
                 handwrittenMode = handwrittenMode,
+                language = settings.language,
                 engineType = engineType
             )
         )
@@ -282,34 +290,87 @@ fun PreprocessingScreen(
                 }
             }
 
-            // ═══ Выбор режима сканирования ═══
+            // ═══ Режим распознавания ═══
+            // Движок пользователь не выбирает: текст распознаётся умной цепочкой (Huawei → Tesseract),
+            // код ищется параллельно. Остался только выбор «только код».
             Text(
-                "Scan Mode",
+                "Что распознавать",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
+            val barcodeOnly = engineType == OcrEngineType.BARCODE
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                OcrEngineType.entries.forEachIndexed { index, engine ->
-                    SegmentedButton(
-                        selected = engineType == engine,
-                        onClick = {
-                            engineType = engine
-                            emitSettings()
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = OcrEngineType.entries.size
-                        )
-                    ) {
-                        Text(
-                            engine.displayName,
-                            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                            maxLines = 1
+                SegmentedButton(
+                    selected = !barcodeOnly,
+                    onClick = {
+                        engineType = OcrEngineType.DEFAULT
+                        emitSettings()
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                ) {
+                    Text("Текст и код", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
+                SegmentedButton(
+                    selected = barcodeOnly,
+                    onClick = {
+                        engineType = OcrEngineType.BARCODE
+                        emitSettings()
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                ) {
+                    Text("Только код", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
+            }
+
+            Text(
+                "Текст",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+            )
+            // По умолчанию — умная цепочка (Huawei → Tesseract rus+eng).
+            // Ручной выбор движка — опционально, в выпадающем меню.
+            var engineMenuOpen by remember { mutableStateOf(false) }
+            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
+                TextButton(onClick = { engineMenuOpen = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                    Icon(Icons.Default.AutoAwesome, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Движок: ${if (engineType == OcrEngineType.BARCODE) "Только код" else engineType.displayName}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Icon(Icons.Default.ArrowDropDown, null, Modifier.size(18.dp))
+                }
+                DropdownMenu(expanded = engineMenuOpen, onDismissRequest = { engineMenuOpen = false }) {
+                    listOf(OcrEngineType.HYBRID, OcrEngineType.HUAWEI_ML_KIT, OcrEngineType.TESSERACT, OcrEngineType.ML_KIT).forEach { option ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(option.displayName)
+                                    Text(
+                                        when (option) {
+                                            OcrEngineType.HYBRID -> "Huawei, резерв Tesseract rus+eng"
+                                            OcrEngineType.HUAWEI_ML_KIT -> "Только Huawei ML Kit"
+                                            OcrEngineType.TESSERACT -> "Только Tesseract"
+                                            OcrEngineType.ML_KIT -> "Google ML Kit (латиница)"
+                                            else -> ""
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            trailingIcon = { if (engineType == option) Icon(Icons.Default.Check, null) },
+                            onClick = {
+                                engineType = option
+                                emitSettings()
+                                engineMenuOpen = false
+                            }
                         )
                     }
                 }

@@ -157,8 +157,10 @@ class OcrRepositoryImplV2(
 
     private fun prepareImage(bitmap: Bitmap, settings: ScanSettings, autoCrop: Boolean): Bitmap {
         return when (settings.engineType) {
-            OcrEngineType.TESSERACT,
-            OcrEngineType.HYBRID -> imagePreprocessor.prepareForTesseract(bitmap, settings, autoCrop)
+            // HYBRID (умное) стартует с Huawei, поэтому Tesseract-специфичная
+            // подготовка ему не нужна — она всё равно совпадает с prepareBaseImage.
+            OcrEngineType.TESSERACT -> imagePreprocessor.prepareForTesseract(bitmap, settings, autoCrop)
+            OcrEngineType.HYBRID,
             OcrEngineType.ML_KIT,
             OcrEngineType.HUAWEI_ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings, autoCrop)
             OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")

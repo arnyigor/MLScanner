@@ -136,6 +136,61 @@ class ImagePreprocessor {
             null
         }
 
+    /**
+     * Программный апскейл маленького фрагмента до [targetLongSide] по длинной стороне.
+     *
+     * Только классический CV (без нейросети): bicubic-ресайз + CLAHE по яркости (LAB)
+     * + unsharp mask. Восстанавливает читаемость мелкого текста; качество близко к
+     * FSRCNN, но без contrib-модуля dnn_superres, которого нет в org.opencv:opencv 4.9.0.
+     * Если OpenCV-натива нет — обычный bicubic через Bitmap.scale.
+     */
+    fun upscaleSmallRegion(bitmap: Bitmap, targetLongSide: Int): Bitmap {
+        val maxSide = maxOf(bitmap.width, bitmap.height)
+        if (maxSide >= targetLongSide) return bitmap
+
+        val factor = (targetLongSide.toFloat() / maxSide).coerceIn(1f, 3f)
+        val newW = (bitmap.width * factor).toInt().coerceAtLeast(1)
+        val newH = (bitmap.height * factor).toInt().coerceAtLeast(1)
+
+        if (!openCvInitialized) {
+            return Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+        }
+
+        val src = Mat()
+        val lab = Mat()
+        val up = Mat()
+        try {
+            Utils.bitmapToMat(bitmap, src)
+            // Bicubic ресайз
+            Imgproc.resize(src, up, org.opencv.core.Size(newW.toDouble(), newH.toDouble()), 0.0, 0.0, Imgproc.INTER_CUBIC)
+            // CLAHE по L-каналу (усиление локального контраста без раскраски шума)
+            Imgproc.cvtColor(up, lab, Imgproc.COLOR_RGBA2RGB)
+            Imgproc.cvtColor(lab, lab, Imgproc.COLOR_RGB2Lab)
+            val channels = ArrayList<Mat>(3)
+            Core.split(lab, channels)
+            val clahe = Imgproc.createCLAHE(2.0, org.opencv.core.Size(8.0, 8.0))
+            clahe.apply(channels[0], channels[0])
+            Core.merge(channels, lab)
+            Imgproc.cvtColor(lab, up, Imgproc.COLOR_Lab2RGB)
+            // Unsharp mask: up*1.5 - blur*0.5
+            val blurred = Mat()
+            Imgproc.GaussianBlur(up, blurred, org.opencv.core.Size(0.0, 0.0), 1.2)
+            Core.addWeighted(up, 1.5, blurred, -0.5, 0.0, up)
+            blurred.release()
+
+            val result = createBitmap(newW, newH)
+            Utils.matToBitmap(up, result)
+            return result
+        } catch (e: Exception) {
+            Log.e(TAG, "upscaleSmallRegion failed", e)
+            return Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+        } finally {
+            src.release()
+            lab.release()
+            up.release()
+        }
+    }
+
     private fun cropDocumentIfNeeded(bitmap: Bitmap): Bitmap {
         return try {
             val quad = documentDetector.detectDocumentQuadrilateral(bitmap) ?: return bitmap

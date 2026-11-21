@@ -719,7 +719,10 @@ fun onReturnToPreprocessing() {
     private suspend fun detectCodes(bitmap: Bitmap, qrOnly: Boolean): List<BarcodeResult> {
         val useCase = scanBarcodeUseCase ?: return emptyList()
         val config = BarcodeScanConfig(
-            allowedFormats = if (qrOnly) setOf(BarcodeFormat.QR_CODE) else emptySet()
+            // В обычном режиме кроме QR ищем DataMatrix — коды маркировки
+            // «Честный знак» (01+GTIN+21+…+92+…) печатаются именно им; OCR мелкого
+            // кода теряет символы, а декодер даёт точную строку.
+            allowedFormats = if (qrOnly) setOf(BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX) else emptySet()
         )
         val started = ScanTrace.now()
         ScanTrace.log { "codes.start qrOnly=$qrOnly input=${bitmap.width}x${bitmap.height}" }
@@ -816,7 +819,9 @@ fun onReturnToPreprocessing() {
     private fun scaleForOcr(bitmap: Bitmap): Bitmap {
         val maxSide = maxOf(bitmap.width, bitmap.height)
         return when {
-            maxSide < OCR_MIN_DIMENSION -> scaleBitmapSafe(bitmap, OCR_MIN_DIMENSION)
+            // Маленький фрагмент: не простое растяжение, а апскейл с усилением
+            // локального контраста (bicubic + CLAHE + unsharp) — мелкий текст читается.
+            maxSide < OCR_MIN_DIMENSION -> imagePreprocessor.upscaleSmallRegion(bitmap, OCR_MIN_DIMENSION)
             maxSide > OCR_MAX_DIMENSION -> scaleBitmapSafe(bitmap, OCR_MAX_DIMENSION)
             else -> bitmap
         }

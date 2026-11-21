@@ -174,8 +174,8 @@ class DewarpInstrumentedTest {
         val assets = InstrumentationRegistry.getInstrumentation().context.assets
         assertTrue(OpenCVLoader.initLocal() || OpenCVLoader.initDebug())
         val preprocessor = ImagePreprocessor()
-        val settings = ScanSettings() // Default engine type is TESSERACT.
-        assertEquals("default engine", OcrEngineType.TESSERACT, settings.engineType)
+        val settings = ScanSettings() // Default engine type is HYBRID (smart: Huawei → Tesseract).
+        assertEquals("default engine", OcrEngineType.HYBRID, settings.engineType)
 
         val curved = prepareForTesseractSize(preprocessor, settings, assets, "dewarp_test.png")
         val flat = prepareForTesseractSize(preprocessor, settings, assets, "clean_scan.png")

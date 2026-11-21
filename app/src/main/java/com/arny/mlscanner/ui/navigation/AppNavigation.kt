@@ -323,6 +323,7 @@ fun AppNavigation(
                     onApplyTextChanges = { viewModel.onApplyTextChanges(it) },
                     onToggleFormatMode = { viewModel.onToggleFormatMode() },
                     onPatternClick = { viewModel.onPatternClick(it) },
+                    onOpenEnhance = { viewModel.onOpenEnhance() },
                     scanSource = sourceLabel(uiState.scanSource),
                     scannedAt = uiState.scannedAt,
                     originalBitmap = uiState.originalBitmap

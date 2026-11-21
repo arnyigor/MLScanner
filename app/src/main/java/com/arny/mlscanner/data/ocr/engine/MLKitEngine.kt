@@ -65,6 +65,8 @@ class MLKitEngine : OcrEngine {
             val visionText = processImage(rec, inputImage)
             val elapsed = System.currentTimeMillis() - startTime
             mapToOcrResult(visionText, elapsed, bitmap.width, bitmap.height, handwrittenMode)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "ML Kit recognition error", e)
             OcrResult.EMPTY.copy(

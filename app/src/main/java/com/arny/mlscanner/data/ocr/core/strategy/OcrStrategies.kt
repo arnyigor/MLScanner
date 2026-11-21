@@ -1,9 +1,11 @@
 package com.arny.mlscanner.data.ocr.core.strategy
 
 import android.util.Log
+import com.arny.mlscanner.data.ocr.core.IOcrQualityAnalyzer
 import com.arny.mlscanner.data.ocr.core.IOcrStrategy
 import com.arny.mlscanner.data.ocr.core.OcrCandidate
 import com.arny.mlscanner.data.ocr.core.OcrEngineRegistry
+import com.arny.mlscanner.data.ocr.core.OcrQualityAnalyzer
 import com.arny.mlscanner.data.ocr.core.PreparedOcrRequest
 
 /**
@@ -41,6 +43,10 @@ abstract class BaseOcrStrategy(
             Log.d(TAG, "Engine $engineId: ${candidate.rawText.length} chars in ${elapsed}ms")
             
             candidate.copy(processingTimeMs = elapsed)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Отмена сканирования — не «слабый результат»: пробрасываем,
+            // иначе стратегия гоняет резервный движок после отмены.
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Engine $engineId failed", e)
             null
@@ -151,54 +157,61 @@ class AccurateStrategy(
 }
 
 /**
- * Стратегия: гибридная (Google ML Kit → Huawei ML Kit → Tesseract fallback).
- * Порядок: Google (основной) → Huawei (fallback для эмуляторов) → Tesseract.
+ * Стратегия: умное распознавание.
+ *
+ * Huawei ML Kit — основной движок (лучше читает кириллицу), Tesseract `rus+eng` —
+ * резерв, если результат Huawei слабый. "Слабый" решает [OcrQualityAnalyzer],
+ * а не количество слов: короткий, но чистый текст остановки не требует.
+ * Google ML Kit в обычной цепочке не участвует (только по явной политике).
  */
 class HybridStrategy(
-    engineRegistry: OcrEngineRegistry
+    engineRegistry: OcrEngineRegistry,
+    private val qualityAnalyzer: IOcrQualityAnalyzer = OcrQualityAnalyzer()
 ) : BaseOcrStrategy(engineRegistry) {
 
+    companion object {
+        private const val TAG = "HybridStrategy"
+
+        /** Меньше этого числа слов считаем, что Huawei почти ничего не прочитал. */
+        private const val MIN_WORDS = 2
+
+        /** Доля "мусорных" символов, после которой результат считаем нечитаемым. */
+        private const val MAX_GARBAGE_RATIO = 0.2f
+    }
+
     override val id: String = "hybrid"
-    override val name: String = "Hybrid (Google → Huawei → Tesseract)"
+    override val name: String = "Smart (Huawei → Tesseract)"
 
     override suspend fun recognize(request: PreparedOcrRequest): List<OcrCandidate> {
         val candidates = mutableListOf<OcrCandidate>()
 
-        // 1. Сначала Google ML Kit (основной, работает на реальных телефонах)
-        val mlkitCandidate = recognizeWithEngine("google_mlkit", request)
-        if (mlkitCandidate != null) {
-            candidates.add(mlkitCandidate)
-            // Если результат хороший, возвращаем
-            if (mlkitCandidate.rawText.isNotBlank() &&
-                mlkitCandidate.rawText.split("\\s+".toRegex()).size >= 3) {
-                return candidates
-            }
-        }
-
-        // 2. Если Google не дал результат (или упал), пробуем Huawei ML Kit
+        // 1. Основной движок: Huawei ML Kit.
         val huaweiCandidate = recognizeWithEngine("huawei_mlkit", request)
         if (huaweiCandidate != null) {
             candidates.add(huaweiCandidate)
-            // Если результат хороший, возвращаем
-            if (huaweiCandidate.rawText.isNotBlank() &&
-                huaweiCandidate.rawText.split("\\s+".toRegex()).size >= 3) {
+            if (isReadable(huaweiCandidate, request)) {
                 return candidates
             }
+            Log.d(TAG, "Huawei result is weak, falling back to Tesseract")
         }
 
-        // 3. Если оба не дали результат, пробуем Tesseract
-        val needsFallback = (mlkitCandidate == null && huaweiCandidate == null) ||
-                (candidates.lastOrNull()?.rawText?.isBlank() == true) ||
-                (candidates.lastOrNull()?.rawText?.split("\\s+".toRegex())?.size ?: 0) < 3
-
-        if (needsFallback) {
-            val tessCandidate = recognizeWithEngine("tesseract", request)
-            if (tessCandidate != null) {
-                candidates.add(tessCandidate)
-            }
+        // 2. Резерв: Tesseract (rus+eng). Слабый результат Huawei остаётся кандидатом —
+        // если Tesseract ничего не даст, покажем хотя бы частичный текст.
+        val tessCandidate = recognizeWithEngine("tesseract", request)
+        if (tessCandidate != null) {
+            candidates.add(tessCandidate)
         }
 
         return candidates
+    }
+
+    /** Годится ли результат, чтобы не гонять резервный движок. */
+    private fun isReadable(candidate: OcrCandidate, request: PreparedOcrRequest): Boolean {
+        val text = candidate.rawText.trim()
+        if (text.isEmpty()) return false
+
+        val quality = qualityAnalyzer.analyze(candidate, text, request.originalRequest)
+        return quality.wordCount >= MIN_WORDS && quality.garbageRatio <= MAX_GARBAGE_RATIO
     }
 }
 

@@ -81,14 +81,30 @@ class HuaweiMLKitEngine : OcrEngine {
 
         val startTime = System.currentTimeMillis()
 
+        // Защитная копия на входе: отмена корутины НЕ останавливает внутренний пул
+        // Huawei (он асинхронно делает bitmap.copy() от нашего кадра). Если вызывающий
+        // код рекycled битмап после отмены — пул Huawei падает с SIGABRT
+        // "cannot access an invalid/free'd bitmap". Копия живёт до конца задачи и
+        // освобождается GC — рекcycle её никто не вызывает.
+        val safeBitmap = try {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: bitmap
+        } catch (e: Exception) {
+            Log.w(TAG, "Defensive copy failed, using original: ${e.message}")
+            bitmap
+        }
+
         return try {
-            val frame = MLFrame.fromBitmap(bitmap)
+            val frame = MLFrame.fromBitmap(safeBitmap)
             val mlText = processFrame(ana, frame)
             val elapsed = System.currentTimeMillis() - startTime
             
             Log.d(TAG, "Recognition completed in ${elapsed}ms, text length: ${mlText.stringValue.length}")
             
             mapToOcrResult(mlText, elapsed, bitmap.width, bitmap.height)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Отмену пробрасываем наверх: это не «слабый результат» и не триггер
+            // для fallback на Tesseract.
+            throw e
         } catch (e: Exception) {
             val elapsed = System.currentTimeMillis() - startTime
             Log.e(TAG, "Huawei ML Kit recognition error: ${e.message}", e)

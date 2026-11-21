@@ -33,8 +33,9 @@ package com.arny.mlscanner.domain.models
      val autoRotateEnabled: Boolean = true,
      // ▶ НОВОЕ: Режим рукописного текста
       val handwrittenMode: Boolean = false,
-      val language: OcrLanguage = OcrLanguage.DEFAULT,
-      val engineType: OcrEngineType = OcrEngineType.TESSERACT,
+      val language: OcrLanguage = OcrLanguage.RUSSIAN_ENGLISH,
+      // Умное распознавание по умолчанию: Huawei первым, Tesseract резервом.
+      val engineType: OcrEngineType = OcrEngineType.DEFAULT,
       val confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD,
       // ▶ НОВОЕ: Multi-pass режим для Tesseract
       val useMultiPass: Boolean = false

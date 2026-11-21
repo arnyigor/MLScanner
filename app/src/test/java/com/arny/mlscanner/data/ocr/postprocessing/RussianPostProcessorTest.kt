@@ -9,6 +9,32 @@ import org.junit.Assert.*
  * Проверяют исправление типичных ошибок OCR в русском тексте.
  */
 class RussianPostProcessorTest {
+
+    @Test
+    fun `test machine code line is not cyrillized`() {
+        // Код маркировки «Честный знак» из OCR: GS1-префикс 01 + GTIN,
+        // base32-хвост. Латиница должна остаться латиницей, регистр — верхний.
+        val input = "0104680791832057215lQMydhf-&*cq91EE1292AO7r2RECpyYAWRtu32Q9fj5dRnSyw5FVUTWCfR8R3XE="
+
+        val result = RussianPostProcessor.process(input)
+
+        // Верхний регистр; l после цифры 5 → 1, O перед цифрой 7 → 0;
+        // буквенные поля (base32-хвост) не перекодируются в кириллицу.
+        assertEquals(
+            "01046807918320572151QMYDHF-&*CQ91EE1292A07R2RECPYYAWRTU32Q9FJ5DRNSYW5FVUTWCFR8R3XE=",
+            result
+        )
+        assertFalse(result.contains("РЕС"))
+        assertFalse(result.contains("ЫУ")) // cyrillization of Rtu etc
+    }
+
+    @Test
+    fun `test url line is not cyrillized or uppercased`() {
+        val input = "https://example.com/order?id=2O4l"
+        val result = RussianPostProcessor.process(input)
+        assertTrue(result.startsWith("https://"))
+        assertEquals("https://example.com/order?id=2041", result)
+    }
     
     @Test
     fun `test latin to cyrillic conversion in mixed word`() {

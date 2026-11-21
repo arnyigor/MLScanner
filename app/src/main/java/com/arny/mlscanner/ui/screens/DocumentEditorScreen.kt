@@ -44,6 +44,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -643,17 +644,9 @@ private fun SettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Языки и движок") },
+        title = { Text("Язык и дополнительно") },
         text = {
             Column {
-                Text("Движок", style = MaterialTheme.typography.labelLarge)
-                OcrEngineType.entries.forEach { e ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = engine == e, onCheckedChange = { engine = e })
-                        Text(e.displayName, Modifier.padding(start = 8.dp))
-                    }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 Text("Язык распознавания", style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OcrLanguage.entries.forEach { lang ->
@@ -668,6 +661,15 @@ private fun SettingsDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = autoRotate, onCheckedChange = { autoRotate = it })
                     Text("Автоповорот страницы", Modifier.padding(start = 8.dp))
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                // Обычно не трогается: умная цепочка сама выбирает движок.
+                Text("Движок вручную (для отладки)", style = MaterialTheme.typography.labelLarge)
+                OcrEngineType.entries.forEach { e ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = engine == e, onClick = { engine = e })
+                        Text(e.displayName, Modifier.padding(start = 8.dp))
+                    }
                 }
             }
         },

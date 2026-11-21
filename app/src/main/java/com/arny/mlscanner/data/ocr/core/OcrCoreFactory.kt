@@ -40,8 +40,9 @@ class OcrCoreFactory(private val context: Context) {
         // 3. Создаём селектор результатов
         val resultSelector = OcrResultSelector()
         
-        // 4. Создаём селектор стратегий
-        val strategySelector = OcrStrategySelector(registry)
+        // 4. Создаём селектор стратегий (анализатор качества нужен умной цепочке
+        // для решения о резервном движке)
+        val strategySelector = OcrStrategySelector(registry, qualityAnalyzer)
         
         // 5. Собираем pipeline
         val pipeline = OcrPipeline(
@@ -145,8 +146,7 @@ fun com.arny.mlscanner.domain.models.ScanSettings.toOcrRequest(
         language = this.language,
         taskType = OcrTaskType.GENERAL_TEXT,
 enginePolicy = when (this.engineType) {
-            // ▶ FIX: Используем HYBRID вместо ML_KIT_ONLY для fallback на Tesseract
-            com.arny.mlscanner.domain.models.OcrEngineType.ML_KIT -> OcrEnginePolicy.HYBRID
+            com.arny.mlscanner.domain.models.OcrEngineType.ML_KIT -> OcrEnginePolicy.GOOGLE_MLKIT_ONLY
             com.arny.mlscanner.domain.models.OcrEngineType.TESSERACT -> OcrEnginePolicy.TESSERACT_ONLY
             com.arny.mlscanner.domain.models.OcrEngineType.HUAWEI_ML_KIT -> OcrEnginePolicy.HUAWEI_ONLY
             com.arny.mlscanner.domain.models.OcrEngineType.HYBRID -> OcrEnginePolicy.HYBRID

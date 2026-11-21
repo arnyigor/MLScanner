@@ -7,7 +7,8 @@ import com.arny.mlscanner.data.ocr.core.*
  * Выбирает подходящую стратегию на основе запроса.
  */
 class OcrStrategySelector(
-    private val engineRegistry: OcrEngineRegistry
+    private val engineRegistry: OcrEngineRegistry,
+    private val qualityAnalyzer: IOcrQualityAnalyzer = OcrQualityAnalyzer()
 ) : IOcrStrategySelector {
     
     override fun select(request: OcrRequest): IOcrStrategy {
@@ -18,7 +19,7 @@ class OcrStrategySelector(
             OcrEnginePolicy.HUAWEI_ONLY -> HuaweiMLKitOnlyStrategy(engineRegistry)
             OcrEnginePolicy.FAST -> FastStrategy(engineRegistry)
             OcrEnginePolicy.ACCURATE -> AccurateStrategy(engineRegistry)
-            OcrEnginePolicy.HYBRID -> HybridStrategy(engineRegistry)
+            OcrEnginePolicy.HYBRID -> HybridStrategy(engineRegistry, qualityAnalyzer)
             OcrEnginePolicy.AUTO -> selectByTask(request)
             OcrEnginePolicy.ONNX_ONLY -> {
                 // TODO: Implement ONNX strategy when ready
@@ -33,8 +34,8 @@ class OcrStrategySelector(
     private fun selectByTask(request: OcrRequest): IOcrStrategy {
         return when (request.taskType) {
             OcrTaskType.GENERAL_TEXT -> {
-                // Для общего текста: быстрый ML Kit с fallback
-                HybridStrategy(engineRegistry)
+                // Для общего текста: умная цепочка Huawei → Tesseract
+                HybridStrategy(engineRegistry, qualityAnalyzer)
             }
             
             OcrTaskType.DOCUMENT -> {
