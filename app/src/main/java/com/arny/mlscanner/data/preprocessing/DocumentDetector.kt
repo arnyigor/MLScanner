@@ -25,114 +25,150 @@ class DocumentDetector {
         }
     }
 
-    fun detectDocumentQuadrilateral(bitmap: Bitmap): Quadrilateral? {
+    /**
+     * Ищет квад страницы в кадре.
+     *
+     * Работает по уменьшенной копии (скорость), принимает кандидата только если он выпуклый и
+     * занимает не меньше [minAreaFraction] кадра. Возвращает координаты исходного битмапа.
+     */
+    fun detectDocumentQuadrilateral(bitmap: Bitmap, minAreaFraction: Double = 0.25): Quadrilateral? {
+        if (bitmap.width < 32 || bitmap.height < 32) return null
+        val kMaxSide = 800.0
+        val scale = minOf(1.0, kMaxSide / maxOf(bitmap.width, bitmap.height))
+
+        val mat = Mat()
+        val processed = Mat()
+        val edges = Mat()
+        val contours = ArrayList<MatOfPoint>()
+        val hierarchy = Mat()
         try {
-            val mat = Mat()
             Utils.bitmapToMat(bitmap, mat)
-            
-            val processedMat = Mat()
-            Imgproc.cvtColor(mat, processedMat, Imgproc.COLOR_RGBA2GRAY)
-            
-            processedMat.convertTo(processedMat, -1, 1.5, 30.0) 
-            Imgproc.GaussianBlur(processedMat, processedMat, Size(5.0, 5.0), 0.0)
-            
-            val edges = Mat()
-            Imgproc.Canny(processedMat, edges, 50.0, 150.0)
-            
-            val contours = ArrayList<MatOfPoint>()
-            val hierarchy = Mat()
-            Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
-            
-            var largestContour: MatOfPoint? = null
-            var maxArea = 0.0
-            
-            for (contour in contours) {
-                val peri = Imgproc.arcLength(MatOfPoint2f(*contour.toArray()), true)
-                val approx = MatOfPoint2f()
-                Imgproc.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, 0.01 * peri, true)
-                
-                if (approx.toArray().size == 4) {
-                    val area = Imgproc.contourArea(contour)
-                    if (area > maxArea) {
-                        maxArea = area
-                        largestContour = contour
-                    }
-                }
-            }
-            
-            if (largestContour != null) {
-                val points = largestContour.toArray()
-                val sortedPoints = sortPoints(points)
-                return Quadrilateral(
-                    topLeft = android.graphics.PointF(sortedPoints[0].x.toFloat(), sortedPoints[0].y.toFloat()),
-                    topRight = android.graphics.PointF(sortedPoints[1].x.toFloat(), sortedPoints[1].y.toFloat()),
-                    bottomRight = android.graphics.PointF(sortedPoints[2].x.toFloat(), sortedPoints[2].y.toFloat()),
-                    bottomLeft = android.graphics.PointF(sortedPoints[3].x.toFloat(), sortedPoints[3].y.toFloat())
+            Imgproc.cvtColor(mat, processed, Imgproc.COLOR_RGBA2GRAY)
+            if (scale < 1.0) {
+                Imgproc.resize(
+                    processed, processed,
+                    Size(bitmap.width * scale, bitmap.height * scale), 0.0, 0.0, Imgproc.INTER_AREA
                 )
             }
-            
-            processedMat.release()
-            mat.release()
-            hierarchy.release()
-            edges.release()
+            Imgproc.GaussianBlur(processed, processed, Size(5.0, 5.0), 0.0)
+            Imgproc.Canny(processed, edges, 50.0, 150.0)
+            Imgproc.findContours(
+                edges, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE
+            )
+
+            val frameArea = (processed.cols() * processed.rows()).toDouble()
+            var bestArea = 0.0
+            var best: Array<Point>? = null
+            for (contour in contours) {
+                val curve = MatOfPoint2f(*contour.toArray())
+                val approx = MatOfPoint2f()
+                try {
+                    val peri = Imgproc.arcLength(curve, true)
+                    if (peri < 4 * kMaxSide / 20) continue  // too small to be a page edge
+                    // Two tolerances: page edges are often slightly rounded or noisy.
+                    for (eps in doubleArrayOf(0.02, 0.05)) {
+                        Imgproc.approxPolyDP(curve, approx, eps * peri, true)
+                        val pts = approx.toArray()
+                        if (pts.size != 4) continue
+                        if (!Imgproc.isContourConvex(MatOfPoint(*pts))) continue
+                        val area = Math.abs(Imgproc.contourArea(MatOfPoint2f(*pts)))
+                        if (area < minAreaFraction * frameArea) continue
+                        if (area > bestArea) {
+                            bestArea = area
+                            best = pts
+                        }
+                        break
+                    }
+                } finally {
+                    curve.release()
+                    approx.release()
+                }
+            }
+
+            val ordered = best ?: return null
+            val p = orderCorners(ordered).map {
+                android.graphics.PointF(
+                    (it.x / scale).toFloat(), (it.y / scale).toFloat()
+                )
+            }
+            return Quadrilateral(p[0], p[1], p[2], p[3])
         } catch (e: Exception) {
             Log.e(TAG, "Error detecting document quadrilateral", e)
+            return null
+        } finally {
+            for (c in contours) c.release()
+            hierarchy.release()
+            edges.release()
+            processed.release()
+            mat.release()
         }
-        
-        return null
     }
 
+    /**
+     * Вырезает квад и разворачивает его в прямоугольник.
+     *
+     * Размер результата — из длин сторон квада (как у сканера), а не размер исходного кадра:
+     * прежняя версия растягивала страницу обратно на весь кадр, то есть не обрезала вовсе.
+     */
     fun correctPerspective(bitmap: Bitmap, quadrilateral: Quadrilateral?): Bitmap? {
-        if (quadrilateral == null) return bitmap
-        
+        if (quadrilateral == null || !quadrilateral.isValid) return null
+
+        val srcMat = Mat()
+        val dstMat = Mat()
+        val srcPoints = MatOfPoint2f()
+        val dstPoints = MatOfPoint2f()
+        val transform = Mat()
         try {
-            val srcMat = Mat()
             Utils.bitmapToMat(bitmap, srcMat)
-            
-            val w: Double = bitmap.width.toDouble()
-            val h: Double = bitmap.height.toDouble()
-            
-            val dstPoints = MatOfPoint2f(
-                Point(0.0, 0.0),
-                Point(w, 0.0),
-                Point(w, h),
-                Point(0.0, h)
+
+            val tl = quadrilateral.topLeft
+            val tr = quadrilateral.topRight
+            val br = quadrilateral.bottomRight
+            val bl = quadrilateral.bottomLeft
+            val width = maxOf(dist(tl, tr), dist(bl, br))
+            val height = maxOf(dist(tl, bl), dist(tr, br))
+            if (width < 16f || height < 16f) return null
+
+            srcPoints.fromArray(
+                Point(tl.x.toDouble(), tl.y.toDouble()),
+                Point(tr.x.toDouble(), tr.y.toDouble()),
+                Point(br.x.toDouble(), br.y.toDouble()),
+                Point(bl.x.toDouble(), bl.y.toDouble())
             )
-            
-            val mappedPoints = quadrilateral.points.map { Point(it.x.toDouble(), it.y.toDouble()) }.toTypedArray()
-            val srcPoints = MatOfPoint2f(*mappedPoints)
-            
-            val transformMatrix = Imgproc.getPerspectiveTransform(srcPoints, dstPoints)
-            
-            val dstMat = Mat()
-            Imgproc.warpPerspective(srcMat, dstMat, transformMatrix, Size(w, h))
-            
-            val resultBitmap = createBitmap(dstMat.cols(), dstMat.rows())
-            Utils.matToBitmap(dstMat, resultBitmap)
-            
-            srcMat.release()
-            dstMat.release()
-            transformMatrix.release()
-            srcPoints.release()
-            dstPoints.release()
-            
-            return resultBitmap
+            dstPoints.fromArray(
+                Point(0.0, 0.0),
+                Point(width.toDouble() - 1, 0.0),
+                Point(width.toDouble() - 1, height.toDouble() - 1),
+                Point(0.0, height.toDouble() - 1)
+            )
+            Imgproc.getPerspectiveTransform(srcPoints, dstPoints).copyTo(transform)
+            Imgproc.warpPerspective(srcMat, dstMat, transform, Size(width.toDouble(), height.toDouble()))
+            if (dstMat.empty()) return null
+
+            return createBitmap(dstMat.cols(), dstMat.rows()).also { Utils.matToBitmap(dstMat, it) }
         } catch (e: Exception) {
             Log.e(TAG, "Error correcting perspective", e)
             return null
+        } finally {
+            transform.release()
+            dstPoints.release()
+            srcPoints.release()
+            dstMat.release()
+            srcMat.release()
         }
     }
 
-    private fun sortPoints(points: Array<Point>): Array<Point> {
-        val sorted = points.sortedBy { it.x + it.y } 
-        val p1 = sorted[0] 
-        val p4 = sorted[3] 
-        
-        val remaining = sorted.subList(1, 3).sortedBy { it.x }
-        val p2 = remaining[0] 
-        val p3 = remaining[1] 
-        
-        return arrayOf(p1, p2, p4, p3)
+    private fun dist(a: android.graphics.PointF, b: android.graphics.PointF): Float =
+        kotlin.math.hypot(a.x - b.x, a.y - b.y)
+
+    /** Угловой порядок по часовой стрелке от верхнего левого угла — устойчив к повороту кадра. */
+    private fun orderCorners(points: Array<Point>): List<Point> {
+        val cx = points.sumOf { it.x } / points.size
+        val cy = points.sumOf { it.y } / points.size
+        val sorted = points.sortedBy { Math.atan2(it.y - cy, it.x - cx) }
+        // atan2 order starts at the left-middle; rotate so the top-left-most corner comes first
+        val start = sorted.indices.minByOrNull { sorted[it].x + sorted[it].y } ?: 0
+        return List(sorted.size) { sorted[(start + it) % sorted.size] }
     }
 
     fun detectQuadrilaterals(bitmap: Bitmap): List<List<org.opencv.core.Point>> {

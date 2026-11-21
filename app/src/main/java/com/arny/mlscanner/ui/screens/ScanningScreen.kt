@@ -7,6 +7,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,7 +53,13 @@ fun ScanningScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    androidx.activity.compose.BackHandler {
+        viewModel.onCancelScanning()
+        onCancel()
+    }
+
     ScanningContent(
+        codes = uiState.qrCodes,
         progress = uiState.processingProgress,
         message = uiState.processingMessage,
         onCancel = {
@@ -65,7 +73,8 @@ fun ScanningScreen(
 fun ScanningContent(
     progress: Float,
     message: String,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    codes: List<com.arny.mlscanner.domain.models.barcode.BarcodeResult> = emptyList()
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "scan")
     val rotation by infiniteTransition.animateFloat(
@@ -112,6 +121,8 @@ fun ScanningContent(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            if (codes.isNotEmpty()) DetectedCodes(codes)
 
             Spacer(Modifier.height(32.dp))
 

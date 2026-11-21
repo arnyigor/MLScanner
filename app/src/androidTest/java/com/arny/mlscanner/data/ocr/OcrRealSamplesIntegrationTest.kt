@@ -19,6 +19,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class OcrRealSamplesIntegrationTest {
 
+    /** Ассеты лежат в APK тестов: читать их нужно через instrumentation context, а не targetContext. */
+    private fun assetsContext(): android.content.Context =
+        InstrumentationRegistry.getInstrumentation().context
+
     @Test
     fun printedHomeworkImageRecognizesStableAnchorsInReadingOrder() {
         assumeFalse(
@@ -29,7 +33,7 @@ class OcrRealSamplesIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = createInitializedRepository(context)
-            val bitmap = loadAssetBitmap(context, "ocr_samples/test_image.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "ocr_samples/test_image.jpg")
 
         try {
             val result = repository.recognize(bitmap, tesseractSettings(OcrLanguage.RUSSIAN))
@@ -83,7 +87,7 @@ class OcrRealSamplesIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = createInitializedRepository(context)
-            val bitmap = loadAssetBitmap(context, "ocr_samples/007.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "corpus/007.jpg")
 
             try {
                 val result = repository.recognize(bitmap, tesseractSettings(OcrLanguage.RUSSIAN))
@@ -123,7 +127,7 @@ class OcrRealSamplesIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = createInitializedRepository(context)
-            val original = loadAssetBitmap(context, "ocr_samples/003.jpg")
+            val original = loadAssetBitmap(assetsContext(), "corpus/003.jpg")
             val bitmap = original.scaledToMaxSide(900)
 
             try {

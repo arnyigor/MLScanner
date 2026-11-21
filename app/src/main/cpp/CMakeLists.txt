@@ -35,24 +35,35 @@ else()
 endif()
 
 # ============================================================
-# Source Files — Pipeline (for future extensibility)
+# Source Files
 # ============================================================
 
-set(PIPELINE_SOURCES
+# The PaddleOCR-Lite demo sources (pipeline.cc, det/cls/rec_process.cc, utils.cc,
+# Native.cc) need paddle_api.h, which is NOT vendored in this project, so they are
+# built only when PaddleLite is actually present under third_party/paddle.
+set(PIPELINE_PADDLE_SOURCES
     pipeline/pipeline.cc
     pipeline/det_process.cc
     pipeline/rec_process.cc
     pipeline/cls_process.cc
-    pipeline/db_post_process.cc
-    pipeline/clipper.cpp
     pipeline/utils.cc
+    pipeline/Native.cc
 )
 
-# Check if pipeline sources exist
-set(PIPELINE_EXISTS FALSE)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pipeline/pipeline.cc")
-    set(PIPELINE_EXISTS TRUE)
-    message(STATUS "✅ Pipeline sources found")
+set(PIPELINE_SOURCES
+    pipeline/clipper.cpp
+    pipeline/db_post_process.cc
+    pipeline/dewarp.cpp
+    pipeline/ScanNative.cc
+)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/paddle/include/paddle_api.h")
+    message(STATUS "✅ PaddleLite found — building PaddleOCR pipeline sources")
+    list(APPEND PIPELINE_SOURCES ${PIPELINE_PADDLE_SOURCES})
+    set(PADDLE_AVAILABLE TRUE)
+else()
+    message(STATUS "⚠️ PaddleLite not vendored — PaddleOCR pipeline sources excluded from the build")
+    set(PADDLE_AVAILABLE FALSE)
 endif()
 
 add_library(
@@ -113,6 +124,11 @@ target_compile_options(ml_scanner_jni PRIVATE
     -ffast-math
     -fno-strict-aliasing
 )
+
+# dewarp.cpp uses NaN as an "unknown content edge" sentinel and checks it with isfinite(),
+# which -ffast-math (set for the whole target above) is allowed to optimise away. Keep strict
+# IEEE semantics for this file only.
+set_source_files_properties(pipeline/dewarp.cpp PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
 
 # NDK 25 specific flags
 if(ANDROID_NDK_MAJOR AND ANDROID_NDK_MAJOR GREATER_EQUAL 25)

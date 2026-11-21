@@ -1,13 +1,9 @@
 package com.arny.mlscanner.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,16 +12,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Camera
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
@@ -35,7 +29,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -53,43 +46,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.foundation.selection.selectable
+import com.arny.mlscanner.ScanTrace
 import com.arny.mlscanner.data.ocr.postprocessing.PatternRecognizer
 import com.arny.mlscanner.data.ocr.postprocessing.TextFormatter
 import com.arny.mlscanner.domain.models.RecognizedText
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-@Preview(showBackground = true)
 @Composable
-fun ResultContentPreview() {
-    val dummyText = RecognizedText(
-        formattedText = "Hello World\nSecond line",
-        confidence = 0.92f,
-        detectedLanguage = "en",
-        originalText = "Hello World",
-        blocks = emptyList()
-    )
-
-    ResultScreen(
-        recognizedText = dummyText,
-        resultBitmap = null,
-        onBack = { },
-        onNewScan = { }
-    )
-}
+fun ResultScreenPreviewPlaceholder() {}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ResultScreen(
-    recognizedText: RecognizedText,
+    recognizedText: RecognizedText?,
     resultBitmap: Bitmap?,
     onBack: () -> Unit,
     onNewScan: () -> Unit,
@@ -98,41 +77,65 @@ fun ResultScreen(
     onTextEdited: (String) -> Unit = {},
     onApplyTextChanges: (String) -> Unit = {},
     onToggleFormatMode: () -> Unit = {},
-    onPatternClick: (TextFormatter.ClickAction) -> Unit = {}
+    onOpenEnhance: () -> Unit = {},
+    onPatternClick: (TextFormatter.ClickAction) -> Unit = {},
+    codes: List<com.arny.mlscanner.domain.models.barcode.BarcodeResult> = emptyList(),
+    /** Источник кадра и время скана — только подпись, без логики. */
+    scanSource: String = "",
+    scannedAt: Long = 0L,
+    /** Оригинальный кадр для сравнения в просмотрщике. */
+    originalBitmap: Bitmap? = null
 ) {
     val context = LocalContext.current
-    var editableText by remember { mutableStateOf(recognizedText.formattedText) }
+    var editableText by remember { mutableStateOf(recognizedText?.formattedText.orEmpty()) }
+    var viewerOpen by remember { mutableStateOf(false) }
     val modes = listOf(
         TextFormatter.FormatMode.RAW to "Raw",
         TextFormatter.FormatMode.MARKDOWN to "Markdown"
     )
 
-    LaunchedEffect(recognizedText.formattedText, recognizedText.formatMode) {
-        editableText = recognizedText.formattedText
+    LaunchedEffect(recognizedText?.formattedText, recognizedText?.formatMode) {
+        editableText = recognizedText?.formattedText.orEmpty()
     }
+
+    val timeLabel = if (scannedAt > 0L) {
+        SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(scannedAt))
+    } else ""
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Result") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                title = {
+                    Column {
+                        Text("Результат")
+                        if (timeLabel.isNotEmpty()) {
+                            Text(
+                                listOf(scanSource, timeLabel).filter { it.isNotBlank() }
+                                    .joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text("Править") }
+                },
                 actions = {
-                    IconButton(onClick = {
-                        copyToClipboard(context, editableText)
+                    if (resultBitmap != null) IconButton(onClick = onOpenEnhance) {
+                        Icon(Icons.Default.AutoFixHigh, "Обработка изображения")
+                    }
+                    if (recognizedText != null) IconButton(onClick = {
+                        copyToClipboardWithToast(context, editableText)
                         onCopy()
                     }) {
-                        Icon(Icons.Default.ContentCopy, "Copy")
+                        Icon(Icons.Default.ContentCopy, "Копировать текст")
                     }
-
-                    IconButton(onClick = {
+                    if (recognizedText != null) IconButton(onClick = {
                         shareText(context, editableText)
                         onShare()
                     }) {
-                        Icon(Icons.Default.Share, "Share")
+                        Icon(Icons.Default.Share, "Поделиться")
                     }
                 }
             )
@@ -140,8 +143,8 @@ fun ResultScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onNewScan,
-                icon = { Icon(Icons.Default.Camera, "New scan") },
-                text = { Text("New Scan") }
+                icon = { Icon(Icons.Default.CameraAlt, "Новый скан") },
+                text = { Text("Новый скан") }
             )
         }
     ) { padding ->
@@ -151,31 +154,68 @@ fun ResultScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            StatsCard(
-                confidence = recognizedText.confidence,
-                language = recognizedText.detectedLanguage,
-                blocksCount = recognizedText.blocks.size,
-                modifier = Modifier.padding(16.dp)
-            )
+            // ═══ Коды первыми: они результат, а не приложение к тексту ═══
+            if (codes.isNotEmpty()) {
+                DetectedCodes(codes)
+            }
 
+            // ═══ Статистика одной строкой, без отдельной карточки ═══
+            if (recognizedText != null) {
+                Text(
+                    text = "%d%% · %s · %d блок(а/ов)".format(
+                        (recognizedText.confidence * 100).toInt(),
+                        recognizedText.detectedLanguage.uppercase(),
+                        recognizedText.blocks.size
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            // ═══ Снимок: открыть на весь экран для сравнения ═══
             if (resultBitmap != null && !resultBitmap.isRecycled) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(180.dp)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(12.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .clickable {
+                            ScanTrace.log { "viewer.open hasOriginal=${originalBitmap != null}" }
+                            viewerOpen = true
+                        },
+                    shape = MaterialTheme.shapes.medium
                 ) {
-                    Image(
-                        bitmap = resultBitmap.asImageBitmap(),
-                        contentDescription = "Scanned Image",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(12.dp)),
-                        contentScale = ContentScale.Fit
-                    )
+                    Column {
+                        androidx.compose.foundation.Image(
+                            bitmap = resultBitmap.asImageBitmap(),
+                            contentDescription = "Скан, нажмите чтобы рассмотреть",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                            contentScale = ContentScale.Crop
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Image,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                "Нажмите, чтобы рассмотреть" +
+                                    if (originalBitmap != null) " и сравнить с оригиналом" else "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
+
+            if (recognizedText == null) return@Column
 
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
@@ -200,8 +240,22 @@ fun ResultScreen(
                 }
             }
 
-val clickableElements = recognizedText.clickableElements
-            android.util.Log.d("ResultScreen", "clickableElements: ${clickableElements.map { "${it.type}:${it.value}" }}")
+            // ═══ Заметная кнопка копирования: то, что сейчас на экране ═══
+            TextButton(
+                onClick = {
+                    copyToClipboardWithToast(context, editableText)
+                    onCopy()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            ) {
+                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Копировать текст (${editableText.length} симв.)")
+            }
+
+            val clickableElements = recognizedText.clickableElements
             if (clickableElements.isNotEmpty()) {
                 Column(
                     modifier = Modifier
@@ -209,11 +263,18 @@ val clickableElements = recognizedText.clickableElements
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "Detected",
+                        text = "Найдено в тексте",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    clickableElements.take(6).forEach { element ->
+                    clickableElements.sortedBy {
+                        when (it.type) {
+                            PatternRecognizer.PatternType.URL -> 0
+                            PatternRecognizer.PatternType.PHONE,
+                            PatternRecognizer.PatternType.EMAIL -> 1
+                            else -> 2
+                        }
+                    }.take(6).forEach { element ->
                         TextButton(
                             onClick = { onPatternClick(element.action) },
                             modifier = Modifier.fillMaxWidth()
@@ -230,9 +291,9 @@ val clickableElements = recognizedText.clickableElements
                 }
             }
 
-            // Текстовое поле или Markdown рендер
+            // ═══ Текстовое поле или Markdown ═══
             if (recognizedText.formatMode == TextFormatter.FormatMode.RAW) {
-                OutlinedTextField(
+                androidx.compose.material3.OutlinedTextField(
                     value = editableText,
                     onValueChange = {
                         editableText = it
@@ -240,24 +301,22 @@ val clickableElements = recognizedText.clickableElements
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp)
                         .padding(horizontal = 16.dp),
                     textStyle = TextStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 14.sp
                     ),
-                    label = { Text("Raw Text (editable)") },
-                    placeholder = { Text("No text recognized") },
+                    label = { Text("Текст (можно править)") },
+                    placeholder = { Text("Текст не распознан") },
                     trailingIcon = {
                         IconButton(onClick = { onApplyTextChanges(editableText) }) {
-                            Icon(Icons.Default.Refresh, "Refresh detected")
+                            Icon(Icons.Default.Refresh, "Пересчитать")
                         }
                     },
-                    minLines = 8,
-                    maxLines = 18
+                    minLines = 10,
+                    maxLines = 30
                 )
             } else {
-                // Markdown режим - показываем форматированный текст
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -268,13 +327,7 @@ val clickableElements = recognizedText.clickableElements
                             .fillMaxWidth()
                             .padding(16.dp)
                     ) {
-                        Text(
-                            text = "Markdown (read-only)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        SelectionContainer {
+                        androidx.compose.foundation.text.selection.SelectionContainer {
                             Text(
                                 text = editableText,
                                 style = TextStyle(
@@ -288,95 +341,36 @@ val clickableElements = recognizedText.clickableElements
                 }
             }
 
-            Spacer(Modifier.height(80.dp))
+            Spacer(Modifier.height(96.dp))
         }
+    }
+
+    if (viewerOpen && resultBitmap != null) {
+        ImageViewerDialog(
+            original = originalBitmap,
+            processed = resultBitmap,
+            onDismiss = { viewerOpen = false }
+        )
     }
 }
 
 private fun patternLabel(type: PatternRecognizer.PatternType): String {
     return when (type) {
-        PatternRecognizer.PatternType.PHONE -> "Phone"
+        PatternRecognizer.PatternType.PHONE -> "Телефон"
         PatternRecognizer.PatternType.EMAIL -> "Email"
-        PatternRecognizer.PatternType.URL -> "URL"
-        PatternRecognizer.PatternType.DATE -> "Date"
-        PatternRecognizer.PatternType.TIME -> "Time"
-        PatternRecognizer.PatternType.MONEY -> "Money"
-        PatternRecognizer.PatternType.INN -> "INN"
-        PatternRecognizer.PatternType.CARD -> "Card"
+        PatternRecognizer.PatternType.URL -> "Ссылка"
+        PatternRecognizer.PatternType.DATE -> "Дата"
+        PatternRecognizer.PatternType.TIME -> "Время"
+        PatternRecognizer.PatternType.MONEY -> "Сумма"
+        PatternRecognizer.PatternType.INN -> "ИНН"
+        PatternRecognizer.PatternType.CARD -> "Карта"
     }
 }
 
-@Composable
-fun StatsCard(
-    confidence: Float,
-    language: String,
-    blocksCount: Int,
-    modifier: Modifier = Modifier
-) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            StatItem(
-                label = "Confidence",
-                value = "${(confidence * 100).toInt()}%",
-                icon = Icons.Default.CheckCircle
-            )
-            StatItem(
-                label = "Language",
-                value = language.uppercase(),
-                icon = Icons.Default.Language
-            )
-            StatItem(
-                label = "Blocks",
-                value = blocksCount.toString(),
-                icon = Icons.Default.GridOn
-            )
-        }
-    }
-}
-
-@Composable
-fun StatItem(
-    label: String,
-    value: String,
-    icon: ImageVector
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("Recognized Text", text)
-    clipboard.setPrimaryClip(clip)
-}
-
-private fun shareText(context: Context, text: String) {
+private fun shareText(context: android.content.Context, text: String) {
     val shareIntent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, text)
     }
-    context.startActivity(Intent.createChooser(shareIntent, "Share text via"))
+    context.startActivity(Intent.createChooser(shareIntent, "Поделиться текстом"))
 }

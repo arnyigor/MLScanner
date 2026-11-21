@@ -3,6 +3,7 @@
 // ============================================================
 package com.arny.mlscanner.ui.navigation
 
+import com.arny.mlscanner.ScanTrace
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -24,8 +25,15 @@ import androidx.exifinterface.media.ExifInterface
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.map
+import com.arny.mlscanner.ui.screens.HistoryScreen
+import com.arny.mlscanner.ui.screens.HistoryViewModel
+import com.arny.mlscanner.ui.screens.EnhanceScreen
+import org.koin.androidx.compose.koinViewModel
 import com.arny.mlscanner.ui.screens.CameraScreen
 import com.arny.mlscanner.ui.screens.HomeScreen
+import com.arny.mlscanner.ui.screens.DocumentEditorRoute
 import com.arny.mlscanner.ui.screens.PreprocessingRoute
 import com.arny.mlscanner.ui.screens.ResultScreen
 import com.arny.mlscanner.ui.screens.ScanStep
@@ -44,9 +52,12 @@ sealed class Screen(val route: String) {
     data object Home : Screen("home")
     data object Camera : Screen("camera")
     data object Preprocessing : Screen("preprocessing")
+    data object DocumentEditor : Screen("document_editor")
     data object Scanning : Screen("scanning")
     data object Result : Screen("result")
     data object BarcodeScanner : Screen("barcode_scanner")
+    data object History : Screen("history")
+    data object Enhance : Screen("enhance")
 }
 
 @Composable
@@ -65,10 +76,10 @@ fun AppNavigation(
         uri?.let {
             scope.launch {
                 try {
+                    val started = ScanTrace.now()
                     val bitmap = loadBitmapFromUri(context, it)
-                    viewModel.onImageCaptured(bitmap)
-                    // ▶ FIX: Навигация ЯВНО после захвата
-                    navController.navigate(Screen.Preprocessing.route)
+                    ScanTrace.log { "import.ready input=${bitmap.width}x${bitmap.height} elapsedMs=${ScanTrace.elapsed(started)}" }
+                    viewModel.onImageCaptured(bitmap, source = "file")
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
@@ -80,12 +91,30 @@ fun AppNavigation(
         }
     }
 
-    // ▶ FIX: State-driven навигация ТОЛЬКО для Scanning→Result
-    // Preprocessing навигируется явно из callback
-    LaunchedEffect(uiState.step) {
+    // Переходы управляются состоянием. Ключ — кадр + шаг: выбор нового файла
+    // с того же Home при неизменном шаге тоже должен провести навигацию.
+    LaunchedEffect(uiState.step, uiState.previewBitmap) {
         val currentRoute = navController.currentDestination?.route
 
+        ScanTrace.log { "ui.step value=${uiState.step} from=$currentRoute" }
         when (uiState.step) {
+            ScanStep.PREPROCESSING -> {
+                // CamScanner-флоу: съёмка/файл → экран предобработки.
+                // Из редактора не уходим: поворот/«Применить» там меняют кадр, но экран остаётся.
+                if (currentRoute != Screen.Preprocessing.route &&
+                    currentRoute != Screen.DocumentEditor.route &&
+                    uiState.previewBitmap != null
+                ) {
+                    navController.navigate(Screen.Preprocessing.route) {
+                        when (currentRoute) {
+                            Screen.Camera.route -> popUpTo(Screen.Camera.route) { inclusive = true }
+                            Screen.Scanning.route -> popUpTo(Screen.Scanning.route) { inclusive = true }
+                            else -> Unit
+                        }
+                        launchSingleTop = true
+                    }
+                }
+            }
             ScanStep.RESULT -> {
                 if (currentRoute != Screen.Result.route) {
                     navController.navigate(Screen.Result.route) {
@@ -95,7 +124,16 @@ fun AppNavigation(
             }
             ScanStep.SCANNING -> {
                 if (currentRoute != Screen.Scanning.route) {
-                    navController.navigate(Screen.Scanning.route)
+                    navController.navigate(Screen.Scanning.route) {
+                        when (currentRoute) {
+                            Screen.Preprocessing.route ->
+                                popUpTo(Screen.Preprocessing.route) { inclusive = true }
+                            Screen.DocumentEditor.route ->
+                                popUpTo(Screen.DocumentEditor.route) { inclusive = true }
+                            else -> Unit
+                        }
+                        launchSingleTop = true
+                    }
                 }
             }
             // CAMERA и PREPROCESSING — навигируются явно
@@ -160,6 +198,9 @@ fun AppNavigation(
                 is ScanUiEvent.NavigateTo -> {
                     when (event.step) {
                         ScanStep.PREPROCESSING -> navigateToPreprocessing(navController)
+                        ScanStep.ENHANCE -> navController.navigate(Screen.Enhance.route) {
+                            launchSingleTop = true
+                        }
                         ScanStep.SCANNING -> navController.navigate(Screen.Scanning.route) {
                             launchSingleTop = true
                         }
@@ -192,13 +233,21 @@ fun AppNavigation(
     ) {
         // ─── Home ───
         composable(Screen.Home.route) {
+            val historyViewModel: HistoryViewModel = koinViewModel()
+            val historyCount by historyViewModel.scans
+                .map { it.size }
+                .collectAsStateWithLifecycle(initialValue = 0)
             HomeScreen(
                 onCameraClick = {
                     navController.navigate(Screen.Camera.route)
                 },
                 onGalleryClick = {
                     galleryLauncher.launch("image/*")
-                }
+                },
+                onHistoryClick = {
+                    navController.navigate(Screen.History.route)
+                },
+                historyCount = historyCount
             )
         }
 
@@ -206,9 +255,7 @@ fun AppNavigation(
         composable(Screen.Camera.route) {
             CameraScreen(
                 onImageCaptured = { bitmap ->
-                    viewModel.onImageCaptured(bitmap)
-                    // ▶ FIX: Навигация ЯВНО после фото
-                    navController.navigate(Screen.Preprocessing.route)
+                    viewModel.onImageCaptured(bitmap, source = "camera")
                 },
                 onError = { e ->
                     Toast.makeText(
@@ -231,28 +278,30 @@ fun AppNavigation(
             )
         }
 
+        // ─── Выравнивание и улучшение цвета (редактор контура + фильтры) ───
+        composable(Screen.DocumentEditor.route) {
+            DocumentEditorRoute(
+                viewModel = viewModel,
+                navController = navController
+            )
+        }
+
         // ─── Scanning ───
         composable(Screen.Scanning.route) {
             ScanningScreen(
                 viewModel = viewModel,
-                onCancel = {
-                    navController.popBackStack()
-                }
+                onCancel = { navigateToPreprocessing(navController) }
             )
         }
 
 // ─── Result ───
         composable(Screen.Result.route) {
             val recognizedText = uiState.recognizedText
-            val previewBitmap = uiState.previewBitmap
-
-            // DEBUG: Логируем состояние для диагностики
-            android.util.Log.d("AppNavigation", "Result screen: previewBitmap=${previewBitmap != null}, recognizedText=${recognizedText != null}")
-
-            if (recognizedText != null) {
+            if (recognizedText != null || uiState.qrCodes.isNotEmpty()) {
                 ResultScreen(
                     recognizedText = recognizedText,
                     resultBitmap = uiState.resultBitmap,
+                    codes = uiState.qrCodes,
                     onBack = {
                         // ▶ FIX: Возврат на Preprocessing с сохранением состояния
                         viewModel.onReturnToPreprocessing()
@@ -273,9 +322,52 @@ fun AppNavigation(
                     onTextEdited = { viewModel.onTextEdited(it) },
                     onApplyTextChanges = { viewModel.onApplyTextChanges(it) },
                     onToggleFormatMode = { viewModel.onToggleFormatMode() },
-                    onPatternClick = { viewModel.onPatternClick(it) }
+                    onPatternClick = { viewModel.onPatternClick(it) },
+                    scanSource = sourceLabel(uiState.scanSource),
+                    scannedAt = uiState.scannedAt,
+                    originalBitmap = uiState.originalBitmap
                 )
             }
+        }
+
+        // ─── Enhance (обработка изображения) ───
+        composable(Screen.Enhance.route) {
+            val source = uiState.enhancedSource ?: uiState.resultBitmap
+            if (source == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) { navController.popBackStack() }
+            } else {
+                EnhanceScreen(
+                    source = source,
+                    selected = uiState.enhanceFilter,
+                    filtered = uiState.enhancedBitmap,
+                    isApplying = uiState.isApplyingFilters,
+                    onFilterChanged = { viewModel.onEnhanceFilterChanged(it) },
+                    onConfirm = {
+                        viewModel.onConfirmEnhance()
+                        navController.popBackStack()
+                    },
+                    onCancel = {
+                        viewModel.onCancelEnhance()
+                        navController.popBackStack()
+                    }
+                )
+            }
+        }
+
+        // ─── History ───
+        composable(Screen.History.route) {
+            val historyViewModel: HistoryViewModel = koinViewModel()
+            HistoryScreen(
+                viewModel = historyViewModel,
+                onOpen = { entry ->
+                    viewModel.openHistoryScan(entry)
+                    navController.navigate(Screen.Result.route) {
+                        popUpTo(Screen.Home.route)
+                        launchSingleTop = true
+                    }
+                },
+                onBack = { navController.popBackStack() }
+            )
         }
 
         // ─── Barcode Scanner ───
@@ -291,6 +383,13 @@ fun AppNavigation(
 }
 
 // ═══ Утилиты ═══
+
+private fun sourceLabel(source: String): String = when (source) {
+    "camera" -> "Камера"
+    "file" -> "Файл"
+    else -> ""
+}
+
 
 private fun navigateToPreprocessing(navController: NavHostController) {
     val currentRoute = navController.currentDestination?.route
@@ -310,11 +409,7 @@ private fun copyToClipboard(context: Context, text: String) {
 }
 
 private fun startActivitySafely(context: Context, intent: Intent) {
-    runCatching {
-        context.startActivity(intent)
-    }.onFailure {
-        Toast.makeText(context, "No app found for this action", Toast.LENGTH_SHORT).show()
-    }
+    com.arny.mlscanner.ui.screens.openSafely(context, intent, "text.open")
 }
 
 private suspend fun loadBitmapFromUri(
@@ -364,6 +459,7 @@ private fun applyExifRotation(bitmap: Bitmap, path: String): Bitmap {
         bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
     )
 
+    ScanTrace.log { "import.exif rotation=$degrees" }
     if (rotated !== bitmap) {
         bitmap.recycle()
     }

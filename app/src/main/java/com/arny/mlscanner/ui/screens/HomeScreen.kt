@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,7 +37,8 @@ fun HomeScreenPreview() {
     MaterialTheme {
         HomeScreen(
             onCameraClick = {},
-            onGalleryClick = {}
+            onGalleryClick = {},
+            onHistoryClick = {}
         )
     }
 }
@@ -45,6 +48,8 @@ fun HomeScreenPreview() {
 fun HomeScreen(
     onCameraClick: () -> Unit,
     onGalleryClick: () -> Unit,
+    onHistoryClick: () -> Unit = {},
+    historyCount: Int = -1
 ) {
     Scaffold(
         topBar = {
@@ -105,6 +110,45 @@ fun HomeScreen(
             )
 
             Spacer(Modifier.height(48.dp))
+
+            // ═══ История сканов ═══
+            if (historyCount != 0) {
+                Card(
+                    onClick = onHistoryClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, MaterialTheme.colorScheme.outlineVariant
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("История", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                if (historyCount > 0) "Сканов: $historyCount · хранится на телефоне"
+                                else "Хранится только на этом телефоне",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    }
+                }
+            }
         }
     }
 }

@@ -24,6 +24,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AllEnginesUrlDetectionIntegrationTest {
 
+    /** Ассеты лежат в APK тестов: читать их нужно через instrumentation context, а не targetContext. */
+    private fun assetsContext(): android.content.Context =
+        InstrumentationRegistry.getInstrumentation().context
+
     @Test
     fun tesseractRecognizesUrlFromTestImage() {
         assumeFalse(
@@ -34,7 +38,7 @@ class AllEnginesUrlDetectionIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = OcrRepositoryImplV2(context, ImagePreprocessor())
-            val bitmap = loadAssetBitmap(context, "ocr_samples/test_image.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "ocr_samples/test_image.jpg")
 
             try {
                 val init = repository.initialize()
@@ -78,7 +82,7 @@ class AllEnginesUrlDetectionIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = OcrRepositoryImplV2(context, ImagePreprocessor())
-            val bitmap = loadAssetBitmap(context, "ocr_samples/test_image.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "ocr_samples/test_image.jpg")
 
             try {
                 val init = repository.initialize()
@@ -117,7 +121,7 @@ class AllEnginesUrlDetectionIntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = OcrRepositoryImplV2(context, ImagePreprocessor())
-            val bitmap = loadAssetBitmap(context, "ocr_samples/test_image.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "ocr_samples/test_image.jpg")
 
             try {
                 val init = repository.initialize()
@@ -145,9 +149,11 @@ class AllEnginesUrlDetectionIntegrationTest {
                 urls.forEach { println("URL: ${it.value}") }
 
                 assertTrue("Huawei ML Kit should detect URL", urls.isNotEmpty())
+                // Huawei OCR отдаёт домен без схемы — нормализуем обе половины: сравнить нужно хост+путь.
+                fun noScheme(s: String) = s.removePrefix("https://").removePrefix("http://")
                 assertEquals(
-                    "https://yandex.ru/video/preview/16042109160516050498",
-                    urls.first().value
+                    noScheme("https://yandex.ru/video/preview/16042109160516050498"),
+                    noScheme(urls.first().value)
                 )
             } finally {
                 bitmap.recycle()

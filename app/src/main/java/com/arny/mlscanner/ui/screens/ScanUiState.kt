@@ -18,14 +18,37 @@ data class ScanUiState(
     val isApplyingFilters: Boolean = false,
     val isScanning: Boolean = false,
     val error: ScanError? = null,
-    val cropRect: CropRect? = null,
+    /** Пользовательский контур обрезки (4 независимых угла). null — обрезка по детектору. */
+    val cropQuad: CropQuad? = null,
+    /** Контур, найденный детектором на превью: стартовая позиция углов в редакторе. */
+    val suggestedQuad: CropQuad? = null,
     val originalImageSize: ImageSize? = null,
-    val resultBitmap: Bitmap? = null
+    val resultBitmap: Bitmap? = null,
+    val qrCodes: List<com.arny.mlscanner.domain.models.barcode.BarcodeResult> = emptyList(),
+    /** Откуда пришёл кадр: camera / file / editor. Для подписи на экране результата. */
+    val scanSource: String = "",
+    /** Момент завершения скана, epoch millis. */
+    val scannedAt: Long = 0L,
+    /** Оригинальный кадр для сравнения в просмотрщике (тот же экземпляр, что в history.save). */
+    val originalBitmap: Bitmap? = null,
+    /** Выбранный фильтр обработки (лента как в CamScanner). */
+    val enhanceFilter: com.arny.mlscanner.data.image.raster.EnhanceFilter =
+        com.arny.mlscanner.data.image.raster.EnhanceFilter.ORIGINAL,
+    /** Результат применения выбранного фильтра; перекрывает resultBitmap на экране результата. */
+    val enhancedBitmap: Bitmap? = null,
+    /** Исходник для ленты фильтров: кадр, который получил OCR. */
+    val enhancedSource: Bitmap? = null,
+    /** Версия рабочего кадра: растёт при новом фото, повороте и «Применить» в редакторе. */
+    val imageVersion: Long = 0L,
+    /** Фильтр, применённый в редакторе: идёт на превью и в OCR (QR ищется без него). */
+    val preScanFilter: com.arny.mlscanner.data.image.raster.EnhanceFilter =
+        com.arny.mlscanner.data.image.raster.EnhanceFilter.ORIGINAL
 )
 
 enum class ScanStep {
     CAMERA,
     PREPROCESSING,
+    ENHANCE,
     SCANNING,
     RESULT
 }

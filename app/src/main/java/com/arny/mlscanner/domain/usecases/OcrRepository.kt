@@ -27,8 +27,19 @@ interface OcrRepository {
     ): OcrResult
 
     /**
-     * Распознать конкретным движком (для бенчмарков).
+     * Передаёт фактический вход OCR в onInput. Bitmap заимствован только на время callback.
      */
+    suspend fun recognizeWithInput(
+        bitmap: Bitmap,
+        settings: ScanSettings,
+        autoCrop: Boolean,
+        onInput: (Bitmap) -> Unit
+    ): OcrResult {
+        onInput(bitmap)
+        return recognize(bitmap, settings)
+    }
+
+    /** Распознать конкретным движком (для бенчмарков). */
     suspend fun recognizeWith(
         bitmap: Bitmap,
         engineName: String,

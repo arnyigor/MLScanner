@@ -30,11 +30,9 @@ class RussianPostProcessorAdapter : IOcrPostProcessor {
         }
 
         Log.d(TAG, "=== RussianPostProcessor INPUT ===")
-        Log.d(TAG, "Input text: ${text.take(300)}")
 
         val processed = RussianPostProcessor.process(text)
 
-        Log.d(TAG, "Output text: ${processed.take(300)}")
 
         // Анализируем изменения
         val metrics = RussianPostProcessor.analyzeQuality(text, processed)
@@ -276,7 +274,6 @@ class UrlLatinRestorer : IOcrPostProcessor {
         }
 
         Log.d(TAG, "=== UrlLatinRestorer INPUT ===")
-        Log.d(TAG, "Input text: ${text.take(300)}")
 
         var result = text
         val changes = mutableListOf<OcrTextChange>()
@@ -297,7 +294,6 @@ class UrlLatinRestorer : IOcrPostProcessor {
             }
         }
 
-        Log.d(TAG, "Output text: ${result.take(300)}")
         Log.d(TAG, "=== UrlLatinRestorer END ===")
 
         return OcrPostProcessResult(

@@ -76,6 +76,13 @@ android {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
 
+        externalNativeBuild {
+            cmake {
+                // OpenCV из Maven (prefab) собран с shared STL — иначе configure падает
+                arguments += "-DANDROID_STL=c++_shared"
+            }
+        }
+
         // Читаем ключ из корневого local.properties
         val localProperties = Properties()
         // rootProject.file(...) - это важно, ищет файл в корне проекта, а не модуля
@@ -150,6 +157,14 @@ android {
         viewBinding = true
         buildConfig = true
         prefab = true  // Enable prefab for native dependencies
+    }
+
+    // Нативная сборка (libml_scanner_jni.so). Без этого блока CMakeLists.txt не использовался.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     kotlinOptions {

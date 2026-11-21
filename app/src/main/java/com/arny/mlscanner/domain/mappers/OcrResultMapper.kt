@@ -37,7 +37,6 @@ class OcrResultMapper(
      */
     fun toRecognizedText(ocrResult: OcrResult): RecognizedText {
         Log.d(TAG, "=== OcrResultMapper INPUT ===")
-        Log.d(TAG, "fullText: ${ocrResult.fullText.take(300)}")
         Log.d(TAG, "engine: ${ocrResult.engineName}")
 
         // Форматируем текст и распознаём паттерны
@@ -47,9 +46,6 @@ class OcrResultMapper(
         )
 
         Log.d(TAG, "Detected patterns: ${formatted.patterns.size}")
-        formatted.patterns.forEach { pattern ->
-            Log.d(TAG, "  Pattern: ${pattern.type} = '${pattern.value}'")
-        }
 
         val blockInfos = ocrResult.blocks.map { block ->
             TextBlockInfo(

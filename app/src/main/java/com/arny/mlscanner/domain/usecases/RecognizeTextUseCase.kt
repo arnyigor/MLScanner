@@ -55,7 +55,9 @@ class RecognizeTextUseCase(
      */
     suspend fun execute(
         bitmap: Bitmap,
-        settings: ScanSettings
+        settings: ScanSettings,
+        autoCrop: Boolean = true,
+        onInput: (Bitmap) -> Unit = {}
     ): Result<RecognizedText> {
         Log.d(TAG, "Starting OCR: ${bitmap.width}x${bitmap.height}, " +
             "settings=$settings")
@@ -63,7 +65,7 @@ class RecognizeTextUseCase(
         return try {
             // Таймаут защищает от зависания Tesseract
             val ocrResult = withTimeout(timeoutMs) {
-                ocrRepository.recognize(bitmap, settings)
+                ocrRepository.recognizeWithInput(bitmap, settings, autoCrop, onInput)
             }
 
             Log.d(TAG, "OCR completed: ${ocrResult.summary()}")

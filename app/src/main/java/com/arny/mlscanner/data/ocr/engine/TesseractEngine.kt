@@ -66,9 +66,11 @@ class TesseractEngine(private val context: Context) : OcrEngine {
         mutex.withLock {
             if (ready) return@withContext true
 
-            // Детект ARM-translation эмулятора (x86_64 с ARM libs)
-            if (isArmTranslationEmulator()) {
-                Log.w(TAG, "ARM-translation emulator detected, Tesseract disabled")
+            // Детект ARM-translation эмулятора (x86_64 с ARM libs): исторически Tesseract
+            // падал с SIGILL в ndk_translation на старыхTranslator. На API 31+ транслятор
+            // переваривает OpenCV/Tesseract — проверяем эмпирически, не отключая вслепую.
+            if (isArmTranslationEmulator() && Build.VERSION.SDK_INT < 31) {
+                Log.w(TAG, "ARM-translation emulator (API<31) detected, Tesseract disabled")
                 return@withContext false
             }
 
@@ -370,13 +372,10 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             val boxedLines = boxedText.lines().count { it.isNotBlank() }
             
             Log.d(TAG, "Profile=${profile.name} PSM=${profile.psm} rawWords=$rawWordCount boxedWords=$boxedWordCount rawLines=$rawLines boxedLines=$boxedLines")
-            Log.d(TAG, "rawText preview: ${rawText.take(200)}")
-            Log.d(TAG, "boxedText preview: ${boxedText.take(200)}")
             
             val fullText = chooseBestText(rawText, boxedText)
             val selected = if (fullText == rawText) "raw" else "boxed"
             Log.d(TAG, "Selected: $selected")
-            Log.d(TAG, "fullText preview: ${fullText.take(200)}")
             
             // Применяем постобработку для русского текста
             val postProcessedText = if (profile.language == TesseractLanguage.RUS_ONLY || 
@@ -384,7 +383,6 @@ class TesseractEngine(private val context: Context) : OcrEngine {
                 val processed = RussianPostProcessor.process(fullText)
                 val metrics = RussianPostProcessor.analyzeQuality(fullText, processed)
                 Log.d(TAG, "Russian post-processing: $metrics")
-                Log.d(TAG, "postProcessed preview: ${processed.take(200)}")
                 processed
             } else {
                 fullText
@@ -688,19 +686,15 @@ class TesseractEngine(private val context: Context) : OcrEngine {
             val boxedLines = boxedText.lines().count { it.isNotBlank() }
             
             Log.d(TAG, "PSM=${selectPsm(safeBitmap)} rawWords=$rawWordCount boxedWords=$boxedWordCount rawLines=$rawLines boxedLines=$boxedLines")
-            Log.d(TAG, "rawText preview: ${rawText.take(200)}")
-            Log.d(TAG, "boxedText preview: ${boxedText.take(200)}")
             
             val fullText = chooseBestText(rawText, boxedText)
             val selected = if (fullText == rawText) "raw" else "boxed"
             Log.d(TAG, "Selected: $selected")
-            Log.d(TAG, "fullText preview: ${fullText.take(200)}")
             
             // Применяем постобработку для русского текста
             val postProcessedText = RussianPostProcessor.process(fullText)
             val metrics = RussianPostProcessor.analyzeQuality(fullText, postProcessedText)
             Log.d(TAG, "Russian post-processing: $metrics")
-            Log.d(TAG, "postProcessed preview: ${postProcessedText.take(200)}")
             
             val avgConf = if (cleanedWords.isNotEmpty()) {
                 cleanedWords.map { it.confidence / 100f }.average().toFloat()

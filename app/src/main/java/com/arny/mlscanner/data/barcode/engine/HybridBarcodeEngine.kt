@@ -1,6 +1,7 @@
 package com.arny.mlscanner.data.barcode.engine
 
 import android.graphics.Bitmap
+import kotlinx.coroutines.CancellationException
 import com.arny.mlscanner.domain.models.barcode.BarcodeResult
 import com.arny.mlscanner.domain.models.barcode.BarcodeScanConfig
 
@@ -24,6 +25,8 @@ class HybridBarcodeEngine(
     private suspend fun scanHybrid(bitmap: Bitmap, config: BarcodeScanConfig): List<BarcodeResult> {
         val mlKitResults = try {
             mlKitEngine.scan(bitmap, config)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             emptyList()
         }
@@ -34,6 +37,8 @@ class HybridBarcodeEngine(
 
         return try {
             zxingEngine.scan(bitmap, config)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             emptyList()
         }

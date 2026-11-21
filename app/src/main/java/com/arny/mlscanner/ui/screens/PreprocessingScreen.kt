@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -85,19 +86,32 @@ fun PreprocessingRoute(
             previewBitmap = previewBitmap,
             settings = uiState.settings,
             isApplyingFilters = uiState.isApplyingFilters,
+            imageVersion = uiState.imageVersion,
             onUpdateSettings = viewModel::onSettingsChanged,
-            onCropChanged = viewModel::onCropChanged,
+            quadActive = uiState.cropQuad?.let { q ->
+                !q.coversFrame(previewBitmap.width, previewBitmap.height)
+            } == true,
+            onCropChanged = { rect ->
+                // Старый прямоугольник становится контуром: единый кроп для предпросмотра и скана.
+                viewModel.onCropChanged(rect.toQuad(previewBitmap.width, previewBitmap.height))
+            },
             onStartScan = { _, cropRect ->
                 if (cropRect != null) {
-                    viewModel.onCropChanged(cropRect)
+                    viewModel.onCropChanged(cropRect.toQuad(previewBitmap.width, previewBitmap.height))
                 }
+                // QR и текст распознаются вместе (autoDetectQr по умолчанию); навигация — за step.
                 viewModel.onStartScanning()
-                navController.navigate(Screen.Scanning.route)
             },
             onRotate = { degrees ->
                 viewModel.rotateImage(degrees)
             },
-            onBack = { navController.popBackStack() }
+            onOpenEditor = {
+                navController.navigate(Screen.DocumentEditor.route)
+            },
+            onBack = {
+                viewModel.onReturnToPreprocessing()
+                navController.popBackStack()
+            }
         )
     } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -109,6 +123,20 @@ fun PreprocessingRoute(
     }
 }
 
+/** Прямоугольник кропа -> четырёхугольник в пикселях кадра (с ограничением рамками). */
+private fun CropRect.toQuad(width: Int, height: Int): CropQuad {
+    val l = left.coerceIn(0f, width.toFloat())
+    val t = top.coerceIn(0f, height.toFloat())
+    val r = (left + this.width).coerceIn(l, width.toFloat())
+    val b = (top + this.height).coerceIn(t, height.toFloat())
+    return CropQuad(
+        android.graphics.PointF(l, t),
+        android.graphics.PointF(r, t),
+        android.graphics.PointF(r, b),
+        android.graphics.PointF(l, b)
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreprocessingScreen(
@@ -116,9 +144,12 @@ fun PreprocessingScreen(
     settings: ScanSettings = ScanSettings.DEFAULT,
     isApplyingFilters: Boolean = false,
     onUpdateSettings: (ScanSettings) -> Unit = {},
+    quadActive: Boolean = false,
+    imageVersion: Long = 0L,
     onCropChanged: (CropRect) -> Unit = {},
     onStartScan: (ScanSettings, CropRect?) -> Unit = { _, _ -> },
     onRotate: (Float) -> Unit = {},
+    onOpenEditor: () -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     var contrastLevel by remember(settings) { mutableFloatStateOf(settings.contrastLevel) }
@@ -129,13 +160,14 @@ fun PreprocessingScreen(
     var autoRotateEnabled by remember(settings) { mutableStateOf(settings.autoRotateEnabled) }
     var handwrittenMode by remember(settings) { mutableStateOf(settings.handwrittenMode) }
     var engineType by remember(settings) { mutableStateOf(settings.engineType) }
-    var cropRect by remember { mutableStateOf<CropRect?>(null) }
+    // Рамка в координатах конкретного кадра: новая версия кадра — рамка сбрасывается.
+    var cropRect by remember(imageVersion) { mutableStateOf<CropRect?>(null) }
 
     // ▶ НОВОЕ: Режим превью: компактный или полноэкранный
     var expandedPreview by remember { mutableStateOf(false) }
 
-    // ▶ imageId меняется ТОЛЬКО при новом фото или повороте
-    var imageId by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    // Версия кадра из ViewModel: растёт при новом фото, повороте и «Применить» в редакторе.
+    val imageId = imageVersion
 
     fun emitSettings() {
         onUpdateSettings(
@@ -201,7 +233,7 @@ fun PreprocessingScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 if (previewBitmap != null && !previewBitmap.isRecycled) {
-                    CropImageView(
+                    CropRectImageView(
                         bitmap = previewBitmap.asImageBitmap(),
                         modifier = Modifier.fillMaxSize(),
                         imageId = imageId,
@@ -235,7 +267,6 @@ fun PreprocessingScreen(
             ) {
                 IconButton(onClick = {
                     onRotate(-90f)
-                    imageId = System.currentTimeMillis()
                 }) {
                     Icon(Icons.Default.RotateLeft, "Rotate left 90°")
                 }
@@ -246,7 +277,6 @@ fun PreprocessingScreen(
                 )
                 IconButton(onClick = {
                     onRotate(90f)
-                    imageId = System.currentTimeMillis()
                 }) {
                     Icon(Icons.Default.RotateRight, "Rotate right 90°")
                 }
@@ -283,6 +313,27 @@ fun PreprocessingScreen(
                         )
                     }
                 }
+            }
+
+            // ═══ Выравнивание и улучшение цвета (отдельный редактор) ═══
+            FilledTonalButton(
+                onClick = onOpenEditor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                Icon(Icons.Default.Tune, null, Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Выравнивание и улучшение цвета")
+            }
+
+            if (quadActive) {
+                Text(
+                    "Действует контур из «Выравнивания» — он же пойдёт на распознавание",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
             }
 
             // ═══ Кнопка сканирования ═══

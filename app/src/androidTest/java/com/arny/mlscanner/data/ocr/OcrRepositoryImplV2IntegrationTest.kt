@@ -22,6 +22,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class OcrRepositoryImplV2IntegrationTest {
 
+    /** Ассеты лежат в APK тестов: читать их нужно через instrumentation context, а не targetContext. */
+    private fun assetsContext(): android.content.Context =
+        InstrumentationRegistry.getInstrumentation().context
+
     @Test
     fun printedHomeworkImageRecognizesUrlWithV2Pipeline() {
         assumeFalse(
@@ -32,7 +36,7 @@ class OcrRepositoryImplV2IntegrationTest {
         runBlocking {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val repository = OcrRepositoryImplV2(context, ImagePreprocessor())
-            val bitmap = loadAssetBitmap(context, "ocr_samples/test_image.jpg")
+            val bitmap = loadAssetBitmap(assetsContext(), "ocr_samples/test_image.jpg")
 
             try {
                 val init = repository.initialize()

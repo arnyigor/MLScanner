@@ -3,19 +3,21 @@
 // ============================================================
 package com.arny.mlscanner.data.preprocessing
 
+import com.arny.mlscanner.ScanTrace
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.PointF
 import android.util.Log
 import androidx.core.graphics.createBitmap
-import com.arny.mlscanner.data.ocr.preprocessing.MoireRemovalPreprocessor
 import com.arny.mlscanner.domain.models.ScanSettings
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
@@ -30,6 +32,7 @@ class ImagePreprocessor {
         private const val HOUGH_THRESHOLD = 100
 
         private var openCvInitialized = false
+    private val documentDetector by lazy { DocumentDetector() }
 
         fun ensureOpenCvInitialized(): Boolean {
             if (openCvInitialized) return true
@@ -67,22 +70,184 @@ class ImagePreprocessor {
      * Результат — оптимизированный для Tesseract (grayscale).
      * НЕ используется для preview!
      */
-    fun prepareBaseImage(bitmap: Bitmap, settings: ScanSettings): Bitmap {
-        if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
-        if (!openCvInitialized) return bitmap
+    fun prepareBaseImage(
+        bitmap: Bitmap,
+        settings: ScanSettings,
+        autoCrop: Boolean = true,
+    ): Bitmap {
+        ScanTrace.log { "prep.start openCv=$openCvInitialized autoCrop=$autoCrop autoRotate=${settings.autoRotateEnabled} filters=${settings.hasFiltersApplied}" }
+        if (!openCvInitialized) return traceImageStage("filters", bitmap) { applyPreviewFilters(bitmap, settings) }
 
-        val source = if (bitmap.isMutable) bitmap
-        else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        // Проверенная последовательная цепочка (кроп -> ориентация -> деворп). Сводная карта
+        // давала резче край на синтетике, но на живых фото результат стал хуже — откатлено.
+        val cropped = traceImageStage("crop", bitmap) {
+            if (autoCrop) cropDocumentIfNeeded(bitmap) else bitmap
+        }
+        val oriented = traceImageStage("orientation", cropped) {
+            if (autoCrop) orientIfNeeded(cropped, settings) else cropped
+        }
+        val geometry = traceImageStage("dewarp", oriented) { dewarpIfNeeded(oriented) }
+        val filtered = traceImageStage("filters", geometry) { applyPreviewFilters(geometry, settings) }
+        val output = traceImageStage("ocrPolarity", filtered) { applyOcrFilters(filtered) }
+        listOf(cropped, oriented, geometry, filtered).distinct().forEach {
+            if (it !== bitmap && it !== output) it.recycle()
+        }
+        return output
+    }
 
-        // 1. Удаляем муар если обнаружен (для фото экранов)
-        val demoired = MoireRemovalPreprocessor.processIfNeeded(source)
 
-        // Deskew ОТКЛЮЧЁН:
-        // HoughLines часто детектирует ложные линии (рамки таблиц, границы фото)
-        // и поворачивает изображение на неправильный угол → Tesseract не может прочитать.
-        // Tesseract 4 LSTM сам умеет компенсировать небольшой наклон.
+    private inline fun traceImageStage(name: String, input: Bitmap, block: () -> Bitmap): Bitmap {
+        val started = ScanTrace.now()
+        return block().also { output ->
+            ScanTrace.log {
+                "prep.$name input=${input.width}x${input.height} output=${output.width}x${output.height} newBitmap=${output !== input} elapsedMs=${ScanTrace.elapsed(started)}"
+            }
+        }
+    }
 
-        return applyOcrFilters(demoired)
+    /**
+     * Только геометрия (деворп), без фотометрических фильтров.
+     *
+     * Нужна там, где фильтры применяются отдельно: multi-pass Tesseract подбирает свои
+     * профили, но выпрямление страницы от профиля не зависит и не должно теряться.
+     */
+    fun dewarpGeometry(bitmap: Bitmap): Bitmap = dewarpIfNeeded(bitmap)
+
+    /**
+     * Выпрямление перспективы по заданному пользователем контуру (4 угла).
+     * В отличие от [cropDocumentIfNeeded] ничего не детектирует: углы задал человек.
+     */
+    fun rectifyPerspective(
+        bitmap: Bitmap,
+        quad: com.arny.mlscanner.domain.models.Quadrilateral
+    ): Bitmap? = try {
+        documentDetector.correctPerspective(bitmap, quad)
+    } catch (e: Throwable) {
+        Log.e(TAG, "perspective rectify failed", e)
+        null
+    }
+
+    /** Контур листа для предзаполнения редактора обрезки (подсказка, не применяется сама). */
+    fun detectDocumentQuad(bitmap: Bitmap): com.arny.mlscanner.domain.models.Quadrilateral? =
+        try {
+            documentDetector.detectDocumentQuadrilateral(bitmap)
+        } catch (e: Throwable) {
+            Log.e(TAG, "quad detection failed", e)
+            null
+        }
+
+    private fun cropDocumentIfNeeded(bitmap: Bitmap): Bitmap {
+        return try {
+            val quad = documentDetector.detectDocumentQuadrilateral(bitmap) ?: return bitmap
+            val area = quadArea(quad) / (bitmap.width.toDouble() * bitmap.height)
+            // Page already fills the frame: cropping would only resample it.
+            if (area > 0.95) return bitmap
+            val cropped = documentDetector.correctPerspective(bitmap, quad) ?: return bitmap
+            Log.d(TAG, "crop: ${bitmap.width}x${bitmap.height} -> " +
+                "${cropped.width}x${cropped.height} (quad %.2f of frame)".format(area))
+            cropped
+        } catch (e: Throwable) {
+            Log.e(TAG, "crop failed, keeping the original", e)
+            bitmap
+        }
+    }
+
+    private fun quadArea(q: com.arny.mlscanner.domain.models.Quadrilateral): Double {
+        val p = q.points
+        var sum = 0.0
+        for (i in p.indices) {
+            val a = p[i]
+            val b = p[(i + 1) % p.size]
+            sum += a.x.toDouble() * b.y - b.x.toDouble() * a.y
+        }
+        return Math.abs(sum) / 2.0
+    }
+
+    /**
+     * Поворот листа, лежащего на боку, по нативному детектору ориентации.
+     *
+     * Учитывает [ScanSettings.autoRotateEnabled]; при отказе или неубедительном решении
+     * возвращает исходный Bitmap. 180° детектор не отличает — признак только направление
+     * строк, а ошибочный поворот хуже его отсутствия.
+     */
+    private fun orientIfNeeded(bitmap: Bitmap, settings: ScanSettings): Bitmap {
+        if (!settings.autoRotateEnabled || !NativeScan.isAvailable) return bitmap
+        return try {
+            val rgba = Mat()
+            Utils.bitmapToMat(bitmap, rgba)
+            val gray = Mat()
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            val w = gray.cols()
+            val h = gray.rows()
+            val bytes = ByteArray(w * h)
+            gray.get(0, 0, bytes)
+            rgba.release()
+            gray.release()
+
+            val degrees = NativeScan.bestRotationDegrees(bytes, w, h)
+            if (degrees == 0) {
+                bitmap
+            } else {
+                val m = android.graphics.Matrix()
+                m.postRotate(degrees.toFloat())
+                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
+                Log.d(TAG, "orientation: rotated ${bitmap.width}x${bitmap.height} by $degrees -> " +
+                    "${rotated.width}x${rotated.height}")
+                rotated
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "orientation failed, keeping the original", e)
+            bitmap
+        }
+    }
+
+    /**
+     * Выпрямление изогнутой страницы нативным модулем (libml_scanner_jni).
+     *
+     * Возвращает исходный Bitmap без изменений, если страница уже ровная (нативный код
+     * сам решает это по независимой метрике) или если библиотека недоступна.
+     */
+    private fun dewarpIfNeeded(bitmap: Bitmap): Bitmap {
+        if (!NativeScan.isAvailable) return bitmap
+        val startNs = System.nanoTime()
+        return try {
+            val rgba = Mat()
+            Utils.bitmapToMat(bitmap, rgba)
+            val gray = Mat()
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            val w = gray.cols()
+            val h = gray.rows()
+            val bytes = ByteArray(w * h)
+            gray.get(0, 0, bytes)
+            rgba.release()
+            gray.release()
+
+            val field = NativeScan.dewarpField(bytes, w, h)
+            if (field == null) {
+                bitmap
+            } else {
+                val fixed = NativeScan.dewarpApply(bytes, w, h, field)
+                if (fixed == null || fixed.isEmpty()) {
+                    bitmap
+                } else {
+                    val outH = field[1].toInt()
+                    val out = Mat(outH, w, CvType.CV_8UC1)
+                    out.put(0, 0, fixed)
+                    val rgb = Mat()
+                    Imgproc.cvtColor(out, rgb, Imgproc.COLOR_GRAY2RGBA)
+                    val result = createBitmap(out.cols(), out.rows())
+                    Utils.matToBitmap(rgb, result)
+                    out.release()
+                    rgb.release()
+                    Log.d(TAG, "dewarp applied: ${w}x$h -> ${result.width}x${result.height} " +
+                        "in ${(System.nanoTime() - startNs) / 1_000_000} ms")
+                    result
+                }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "dewarp failed, keeping the original", e)
+            bitmap
+        }
     }
 
 /**
@@ -94,16 +259,12 @@ class ImagePreprocessor {
      * - Агрессивным контрастом
      * - Adaptive threshold
      */
-    fun prepareForTesseract(bitmap: Bitmap, settings: ScanSettings): Bitmap {
-        if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
-        if (!openCvInitialized) return bitmap
-
-        val source = if (bitmap.isMutable) bitmap
-        else bitmap.copy(Bitmap.Config.ARGB_8888, true)
-
-        val demoired = MoireRemovalPreprocessor.processIfNeeded(source)
-        return applyOcrFilters(demoired)
-    }
+    fun prepareForTesseract(
+        bitmap: Bitmap,
+        settings: ScanSettings,
+        autoCrop: Boolean = true,
+    ): Bitmap =
+        prepareBaseImage(bitmap, settings, autoCrop)
 
     /**
      * Фильтры для LIVE PREVIEW.

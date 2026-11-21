@@ -63,16 +63,24 @@ class OcrRepositoryImplV2(
     override suspend fun recognize(
         bitmap: Bitmap,
         settings: ScanSettings
+    ): OcrResult = recognizeWithInput(bitmap, settings, true, {})
+
+    override suspend fun recognizeWithInput(
+        bitmap: Bitmap,
+        settings: ScanSettings,
+        autoCrop: Boolean,
+        onInput: (Bitmap) -> Unit
     ): OcrResult {
         if (!initialized) {
             initialize()
         }
 
-        val processed = prepareImage(bitmap, settings)
+        val processed = prepareImage(bitmap, settings, autoCrop)
 
         try {
             val request = settings.toOcrRequest(processed)
-        
+            onInput(processed)
+
             Log.d(TAG, "Starting recognition: task=${request.taskType}, " +
                     "policy=${request.enginePolicy}, language=${request.language}")
 
@@ -147,12 +155,12 @@ class OcrRepositoryImplV2(
         Log.d(TAG, "OCR Core Pipeline released")
     }
 
-    private fun prepareImage(bitmap: Bitmap, settings: ScanSettings): Bitmap {
+    private fun prepareImage(bitmap: Bitmap, settings: ScanSettings, autoCrop: Boolean): Bitmap {
         return when (settings.engineType) {
             OcrEngineType.TESSERACT,
-            OcrEngineType.HYBRID -> imagePreprocessor.prepareForTesseract(bitmap, settings)
+            OcrEngineType.HYBRID -> imagePreprocessor.prepareForTesseract(bitmap, settings, autoCrop)
             OcrEngineType.ML_KIT,
-            OcrEngineType.HUAWEI_ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings)
+            OcrEngineType.HUAWEI_ML_KIT -> imagePreprocessor.prepareBaseImage(bitmap, settings, autoCrop)
             OcrEngineType.BARCODE -> throw IllegalStateException("Use ScanBarcodeUseCase for barcode scanning")
         }
     }

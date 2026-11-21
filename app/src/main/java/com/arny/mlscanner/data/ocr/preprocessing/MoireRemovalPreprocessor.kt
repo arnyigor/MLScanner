@@ -19,6 +19,90 @@ import org.opencv.imgproc.Imgproc
 object MoireRemovalPreprocessor {
     
     private const val TAG = "MoireRemoval"
+
+    private const val SIDE = 256
+    private const val BAND_LOW = 0.05    // cycles/px -> period <= 20 px
+    private const val BAND_HIGH = 0.225  // cycles/px -> period >= 4.4 px
+    private const val MOIRE_THRESHOLD = 8.0
+
+    /**
+     * Сила периодической составляющей в полосе частот, где живёт муар экрана.
+     *
+     * Прежний признак (mean/stdDev магнитуды Собеля) не различал ничего: у обычного текста
+     * градиенты на штрихах дают mean≈155…190 и stdDev≈220…265 при порогах 8/25, то есть
+     * вычитание муара применялось к каждой странице и портило тонкие штрихи.
+     *
+     * Здесь считается отношение пика к среднему по спектру в кольце 0.05…0.225 цикл/пиксель
+     * (периоды 4…20 px). Пиксельная сетка экрана и её биения дают там узкий пик; строчный
+     * текст даёт широкий спектр с максимумом на межстрочном интервале (период 30…60 px,
+     * то есть вне полосы).
+     */
+    fun moireScore(bitmap: Bitmap): Double {
+        val mat = Mat()
+        val gray = Mat()
+        val small = Mat()
+        val f = Mat()
+        val grayF = Mat()
+        val spec = Mat()
+        val planes = ArrayList<Mat>()
+        try {
+            Utils.bitmapToMat(bitmap, mat)
+            Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY)
+            Imgproc.resize(gray, small, Size(SIDE.toDouble(), SIDE.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
+            small.convertTo(f, CvType.CV_32F)
+
+            // Hann window against border leakage into the band.
+            val win = Mat.zeros(SIDE, SIDE, CvType.CV_32F)
+            for (y in 0 until SIDE) {
+                val wy = 0.5 - 0.5 * Math.cos(2.0 * Math.PI * y / (SIDE - 1))
+                for (x in 0 until SIDE) {
+                    val wx = 0.5 - 0.5 * Math.cos(2.0 * Math.PI * x / (SIDE - 1))
+                    win.put(y, x, wy * wx)
+                }
+            }
+            Core.multiply(f, win, grayF)
+            win.release()
+
+            Core.dft(grayF, spec, Core.DFT_COMPLEX_OUTPUT)
+            Core.split(spec, planes)
+            val mag = Mat()
+            Core.magnitude(planes[0], planes[1], mag)
+
+            var peak = 0.0
+            var sum = 0.0
+            var count = 0
+            val half = SIDE / 2
+            for (y in 0 until SIDE) {
+                val iy = if (y < half) y else y - SIDE   // wrap the upper half to negative
+                val fy = iy.toDouble() / SIDE
+                for (x in 0 until SIDE) {
+                    val ix = if (x < half) x else x - SIDE
+                    val fx = ix.toDouble() / SIDE
+                    val r = Math.hypot(fx, fy)
+                    if (r < BAND_LOW || r > BAND_HIGH) continue
+                    val v = mag.get(y, x)[0]
+                    if (v > peak) peak = v
+                    sum += v
+                    count++
+                }
+            }
+            mag.release()
+            if (count == 0) return 1.0
+            return peak / (sum / count + 1e-9)
+        } catch (e: Exception) {
+            Log.e(TAG, "moireScore failed", e)
+            return 1.0
+        } finally {
+            for (m in planes) m.release()
+            spec.release()
+            grayF.release()
+            f.release()
+            small.release()
+            gray.release()
+            mat.release()
+        }
+    }
+
     
     /**
      * Определяет, есть ли на изображении муар.
@@ -152,12 +236,18 @@ object MoireRemovalPreprocessor {
      * Автоматически определяет и удаляет муар если нужно.
      */
     fun processIfNeeded(bitmap: Bitmap): Bitmap {
-        return if (detectMoire(bitmap)) {
-            Log.d(TAG, "Moire detected, applying removal")
-            removeMoire(bitmap)
-        } else {
-            Log.d(TAG, "No moire detected")
-            bitmap
-        }
+        // Отключено по результатам замеров на устройстве (OnePlus 6T, Android 11):
+        //
+        //  - прежний признак (mean/stdDev магнитуды Собеля) срабатывал на любой странице с
+        //    текстом: mean=155…190, stdDev=220…265 при порогах 8/25;
+        //  - спектральный признак тоже не разделяет: обычная страница даёт 84.8, фотография
+        //    экрана с муаром — 84.2 (буквенный шаг попадает в ту же полосу частот);
+        //  - само вычитание (bilateral σ=50 + median 3 + unsharp) ухудшает распознавание:
+        //    кириллица CER 0.038 → 0.167; на реальном фото экрана Tesseract 105 → 76 знаков,
+        //    Huawei ML Kit 306 → 193.
+        //
+        // Пока нет образца, на котором фильтр доказанно помогает, вычитание не применяется:
+        // страница отдаётся без изменений. removeMoire остаётся доступным для явного вызова.
+        return bitmap
     }
 }

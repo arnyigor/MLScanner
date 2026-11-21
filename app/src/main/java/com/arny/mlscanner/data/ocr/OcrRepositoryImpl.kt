@@ -135,13 +135,19 @@ class OcrRepositoryImpl(
                 com.arny.mlscanner.data.ocr.engine.TesseractProfile.MIXED_PROFILES
         }
 
-        // Не делаем preprocessing здесь — каждый профиль применит свой
-        val bestCandidate = tesseractEngine.recognizeMultiPass(bitmap, profiles)
+        // Не делаем фотометрический preprocessing здесь — каждый профиль применит свой.
+        // Геометрия (деворп) от профиля не зависит, поэтому выполняется один раз заранее.
+        val straightened = imagePreprocessor.dewarpGeometry(bitmap)
+        try {
+            val bestCandidate = tesseractEngine.recognizeMultiPass(straightened, profiles)
 
-        Log.d(TAG, "Multi-pass completed: profile='${bestCandidate.profile.name}', " +
-                "score=${bestCandidate.score}, conf=${bestCandidate.confidence}")
+            Log.d(TAG, "Multi-pass completed: profile='${bestCandidate.profile.name}', " +
+                    "score=${bestCandidate.score}, conf=${bestCandidate.confidence}")
 
-        return bestCandidate.result
+            return bestCandidate.result
+        } finally {
+            if (straightened !== bitmap && !straightened.isRecycled) straightened.recycle()
+        }
     }
 
     /**
