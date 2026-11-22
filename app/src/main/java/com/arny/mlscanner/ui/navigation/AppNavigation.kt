@@ -115,8 +115,13 @@ fun AppNavigation(
                     }
                 }
             }
+            ScanStep.ENHANCE -> if (currentRoute == Screen.Result.route) {
+                navController.navigate(Screen.Enhance.route) { launchSingleTop = true }
+            }
             ScanStep.RESULT -> {
-                if (currentRoute != Screen.Result.route) {
+                if (currentRoute == Screen.Enhance.route) {
+                    navController.popBackStack(Screen.Result.route, false)
+                } else if (currentRoute != Screen.Result.route) {
                     navController.navigate(Screen.Result.route) {
                         popUpTo(Screen.Scanning.route) { inclusive = true }
                     }
@@ -343,14 +348,8 @@ fun AppNavigation(
                     filtered = uiState.enhancedBitmap,
                     isApplying = uiState.isApplyingFilters,
                     onFilterChanged = { viewModel.onEnhanceFilterChanged(it) },
-                    onConfirm = {
-                        viewModel.onConfirmEnhance()
-                        navController.popBackStack()
-                    },
-                    onCancel = {
-                        viewModel.onCancelEnhance()
-                        navController.popBackStack()
-                    }
+                    onConfirm = viewModel::onConfirmEnhance,
+                    onCancel = viewModel::onCancelEnhance
                 )
             }
         }

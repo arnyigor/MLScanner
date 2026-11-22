@@ -94,7 +94,7 @@ fun ScanningContent(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(24.dp),
-            modifier = Modifier.padding(32.dp)
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(32.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.DocumentScanner,
@@ -127,7 +127,7 @@ fun ScanningContent(
             Spacer(Modifier.height(32.dp))
 
             TextButton(onClick = onCancel) {
-                Text("Cancel")
+                Text("Отменить сканирование")
             }
         }
     }

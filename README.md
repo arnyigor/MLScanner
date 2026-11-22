@@ -1,184 +1,26 @@
 # MLScanner
 
-Android OCR/scanner app with multiple recognition engines for optimal text recognition quality.
+Android-приложение для распознавания текста и кодов на одной фотографии. Снимите документ камерой или выберите файл, проверьте область сканирования и запустите распознавание.
 
-## Features
+- **Подготовка:** обрезка по четырём углам, коррекция перспективы, поворот и фильтры. Маленькие фрагменты программно увеличиваются перед OCR.
+- **Текст и код:** в режиме «Умное» первым работает Huawei ML Kit; при недоступном движке или слабом результате подключается Tesseract (по умолчанию русский и английский). Можно вручную выбрать Huawei, Tesseract или Google ML Kit. QR и Data Matrix ищутся параллельно, по кадру без фильтров текста.
+- **Только код:** поиск поддерживаемых штрихкодов без OCR. Для маркировки используйте значение декодированного символа, а не распознанную текстовую строку: регистр и служебные разделители могут быть значимыми.
+- **Результат:** просмотр текста и найденных кодов, копирование, отправка текста и история сканов. Фильтры на экране результата меняют изображение, не запускают OCR заново.
 
-- 📸 **Camera & Gallery** — Capture or select images for text recognition
-- 🔍 **Multiple OCR Engines** — Automatic selection of best engine for your device
-- 🇷🇺 **Excellent Russian Support** — 95% accuracy with Huawei ML Kit
-- ⚡ **Fast Recognition** — 200-400ms for most texts
-- 📱 **Universal Compatibility** — Works on all Android devices (API 24+)
-- 🎯 **Smart Fallback** — Automatic engine switching for best results
+## Локальная сборка
 
-## OCR Engines
+Android 7.0+ (API 24), ABI `arm64-v8a` и `armeabi-v7a`. Для сборки нужны JDK 17, Android SDK 36, NDK `25.2.9519653` и CMake `3.22.1`.
 
-### Primary Engines
-
-- **Huawei ML Kit** (v3.17.11.304) — Best for Russian text (95% accuracy)
-  - Requires HMS Core (~10% of devices)
-  - No visual substitution (С→C, Р→P)
-  - Fast: 200-400ms
-  - Supports: Latin, Chinese, Japanese, Korean, Russian
-
-- **Google ML Kit** (v16.0.1) — Fast Latin text recognition
-  - Works on all devices (100%)
-  - Fast: 200-300ms
-  - Automatic fallback when Huawei unavailable
-  - Supports: Latin scripts
-
-- **Tesseract** (v4.7.0) — High accuracy offline OCR
-  - Works on all devices (100%)
-  - Slower: 2-3 seconds
-  - Best for complex documents
-  - Supports: Russian, English, mixed
-
-### Additional Features
-
-- **Hybrid Mode** — Intelligent switching between ML Kit and Tesseract
-- **ZXing** — Barcode and QR code scanning
-- **Preprocessing** — Automatic image enhancement (OpenCV)
-
-## How It Works
-
-```
-App Start
-    ↓
-Parallel Engine Initialization
-    ├─ Google ML Kit ✅
-    ├─ Huawei ML Kit ✅/❌ (if HMS Core available)
-    └─ Tesseract ✅
-    ↓
-User Scans Russian Text
-    ↓
-Automatic Engine Selection:
-    ├─ If Huawei available → Huawei ML Kit (95% accuracy)
-    └─ If not → Google ML Kit + post-processing (80% accuracy)
-    ↓
-Result
+```sh
+bash gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-## Version History
+На Windows используйте `gradlew.bat`. Debug APK находится в `app/build/outputs/apk/debug/`. Версия по умолчанию задана в `version.properties`. Для проверки OCR используйте физическое ARM-устройство: трансляция ARM на эмуляторе x86_64 не эквивалентна работе нативных движков на телефоне.
 
-### v0.0.2 (2026-04-27) - Current
-- ✅ Added Huawei ML Kit integration
-- ✅ Improved Russian text recognition (60% → 95%)
-- ✅ Fixed Cyrillic visual substitution
-- ✅ Automatic fallback for devices without HMS Core
-- ✅ Parallel engine initialization
+## Релиз APK
 
-### v0.0.1 (2026-04-27) - Initial Release
-- ✅ Google ML Kit integration
-- ✅ Tesseract OCR integration
-- ✅ Barcode scanning (ZXing)
-- ✅ Image preprocessing (OpenCV)
-- ✅ Camera and gallery support
+Workflow `.github/workflows/release.yml` запускается при отправке тега `vMAJOR.MINOR.PATCH`, но не при обычном push ветки. Версия APK берётся из тега; minor и patch должны быть в диапазоне 0–99 из-за формулы `versionCode`.
 
-## Requirements
+До первого релиза добавьте в **Settings → Secrets and variables → Actions** секреты `SIGNING_KEY_STORE_BASE64` (содержимое keystore в Base64), `SIGNING_KEY_STORE_PASSWORD`, `SIGNING_KEY_ALIAS` и `SIGNING_KEY_PASSWORD`. Для обновления уже установленного релизного APK используйте тот же ключ. Не храните keystore или пароли в Git.
 
-- Android 7.0+ (API 24+)
-- JDK 17
-- Android NDK 25.2.9519653
-- Gradle 8.14.3
-
-## Build
-
-Use JDK 17 and Android NDK `25.2.9519653`.
-
-```bat
-.\gradlew.bat :app:assembleDebug
-```
-
-Debug APK:
-
-```text
-app/build/outputs/apk/debug/MLScanner-debug-v0.0.1.apk
-```
-
-## Android 11 ARM-compatible emulator
-
-The project APK is built only for ARM ABIs:
-
-```kotlin
-abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-```
-
-On a Windows x86_64 host, use the Android 11 / API 30 / Google APIs / x86_64
-system image. This image can expose ARM ABIs through native translation.
-This is not a pure ARM emulator.
-
-The configured AVD name is:
-
-```text
-Pixel_5_API_30_ARM_Compat
-```
-
-SDK path on this machine:
-
-```powershell
-$env:ANDROID_HOME="g:\Android\SDK"
-$env:ANDROID_SDK_ROOT="g:\Android\SDK"
-```
-
-Start the emulator:
-
-```powershell
-$env:ANDROID_HOME="g:\Android\SDK"
-$env:ANDROID_SDK_ROOT="g:\Android\SDK"
-
-& "g:\Android\SDK\emulator\emulator.exe" `
-  -avd Pixel_5_API_30_ARM_Compat `
-  -no-snapshot-load
-```
-
-Check that the emulator is ready:
-
-```powershell
-& "g:\Android\SDK\platform-tools\adb.exe" wait-for-device
-& "g:\Android\SDK\platform-tools\adb.exe" shell getprop sys.boot_completed
-```
-
-Check ABI support:
-
-```powershell
-& "g:\Android\SDK\platform-tools\adb.exe" shell getprop ro.product.cpu.abi
-& "g:\Android\SDK\platform-tools\adb.exe" shell getprop ro.product.cpu.abilist
-& "g:\Android\SDK\platform-tools\adb.exe" shell getprop ro.product.cpu.abilist64
-& "g:\Android\SDK\platform-tools\adb.exe" shell getprop ro.product.cpu.abilist32
-```
-
-Expected ABI list:
-
-```text
-x86_64,x86,arm64-v8a,armeabi-v7a,armeabi
-```
-
-Build and install the debug APK:
-
-```powershell
-.\gradlew.bat :app:assembleDebug
-
-& "g:\Android\SDK\platform-tools\adb.exe" install -r `
-  "app\build\outputs\apk\debug\MLScanner-debug-v0.0.1.apk"
-```
-
-Run instrumentation tests directly through adb. This avoids occasional
-UTP/DDMLib `closed` failures seen with `connectedDebugAndroidTest` on this
-emulator:
-
-```powershell
-.\gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest
-
-& "g:\Android\SDK\platform-tools\adb.exe" install -r `
-  "app\build\outputs\apk\debug\MLScanner-debug-v0.0.1.apk"
-
-& "g:\Android\SDK\platform-tools\adb.exe" install -r `
-  "app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk"
-
-& "g:\Android\SDK\platform-tools\adb.exe" shell am instrument -w -r `
-  com.arny.mlscanner.test/androidx.test.runner.AndroidJUnitRunner
-```
-
-Known limitation: Tesseract and ML Kit recognition can crash inside
-`ndk_translation` on this API 30 x86_64 ARM-translation emulator.
-Full OCR recognition validation should be done on a real ARM64 Android device.
+Чтобы выпустить версию, поставьте новый тег на проверенный коммит и отправьте именно этот тег в `origin`. Actions выполнит юнит-тесты, соберёт release APK, проверит его подпись и приложит файл к GitHub Release. Без настроенной подписи публикации не будет.

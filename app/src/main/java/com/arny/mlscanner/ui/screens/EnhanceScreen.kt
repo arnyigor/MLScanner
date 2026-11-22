@@ -63,7 +63,8 @@ internal fun EnhanceScreen(
     onConfirm: () -> Unit,
     onCancel: () -> Unit
 ) {
-    var compare by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(onBack = onCancel)
+    var compare by remember(selected) { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -75,19 +76,11 @@ internal fun EnhanceScreen(
                     }
                 },
                 actions = {
-                    // «Сравнить» работает по зажатию: пока палец держится — показываем оригинал.
-                IconButton(
-                    onClick = {},
-                    modifier = Modifier.pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                compare = true
-                                try { awaitRelease() }
-                                finally { compare = false }
-                            }
-                        )
-                    }
-                ) {
+                    androidx.compose.material3.IconToggleButton(
+                        checked = compare,
+                        enabled = filtered != null && !isApplying,
+                        onCheckedChange = { compare = it }
+                    ) {
                         Icon(
                             Icons.Default.Compare,
                             contentDescription = "Сравнить с оригиналом",
@@ -130,15 +123,13 @@ internal fun EnhanceScreen(
                 .padding(padding),
             contentAlignment = Alignment.Center
         ) {
-            val shown = if (compare) source else filtered
-            if (shown != null) {
-                Image(
+            val shown = if (compare) source else filtered ?: source
+            Image(
                     bitmap = shown.asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit
                 )
-            }
             if (compare) {
                 Text(
                     "Оригинал",

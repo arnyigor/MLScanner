@@ -78,6 +78,7 @@ private var originalBitmap: Bitmap? = null
     /** Угол на момент открытия редактора: «Назад» без «Применить» возвращает его. */
     private var editorEntryRotation = 0f
     private var suggestJob: Job? = null
+    private var enhanceJob: Job? = null
 
     /** Результат обработки — кадр после OCR-подготовки, вход для ленты фильтров. */
     private fun setEnhancedSource(bitmap: Bitmap?) {
@@ -154,9 +155,11 @@ private var originalBitmap: Bitmap? = null
     }
 
     fun onCancelEnhance() {
+        enhanceJob?.cancel()
         _uiState.update {
             it.copy(
                 step = ScanStep.RESULT,
+                isApplyingFilters = false,
                 enhancedBitmap = null,
                 enhanceFilter = com.arny.mlscanner.data.image.raster.EnhanceFilter.ORIGINAL
             )
@@ -188,22 +191,18 @@ private var originalBitmap: Bitmap? = null
     }
 
     fun onEnhanceFilterChanged(filter: com.arny.mlscanner.data.image.raster.EnhanceFilter) {
-        val source = enhancedSource ?: previewSourceBitmap ?: return
-        val started = ScanTrace.now()
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            val filtered = com.arny.mlscanner.data.image.raster.DocumentFilters.apply(source, filter)
-            _uiState.update {
-                it.copy(
-                    enhanceFilter = filter,
-                    enhancedBitmap = if (filter ==
-                        com.arny.mlscanner.data.image.raster.EnhanceFilter.ORIGINAL
-                    ) null else filtered
-                )
+        val state = _uiState.value
+        if (state.step != ScanStep.ENHANCE) return
+        val source = state.resultBitmap ?: return
+        enhanceJob?.cancel()
+        val original = filter == com.arny.mlscanner.data.image.raster.EnhanceFilter.ORIGINAL
+        _uiState.update { it.copy(enhanceFilter = filter, enhancedBitmap = null, isApplyingFilters = !original) }
+        if (original) return
+        enhanceJob = viewModelScope.launch {
+            val bitmap = withContext(Dispatchers.Default) {
+                com.arny.mlscanner.data.image.raster.DocumentFilters.apply(source, filter)
             }
-            ScanTrace.log {
-                "enhance.filter filter=$filter input=${source.width}x${source.height} " +
-                    "out=${filtered.width}x${filtered.height} elapsedMs=${ScanTrace.elapsed(started)}"
-            }
+            _uiState.update { it.copy(enhancedBitmap = bitmap, isApplyingFilters = false) }
         }
     }
 
