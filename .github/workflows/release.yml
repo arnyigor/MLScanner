@@ -2,23 +2,33 @@ name: Android release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 permissions:
   contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - name: Validate version
         run: |
-          [[ $GITHUB_REF_NAME =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]
-          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          [[ $RELEASE_TAG =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]
+          echo "VERSION_NAME=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@v3
       - name: Install Android SDK packages
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;25.2.9519653' 'cmake;3.22.1'
       - name: Run unit tests
@@ -37,11 +47,11 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$SIGNING_KEY_STORE_PATH"
           unset KEYSTORE_BASE64
           bash gradlew --no-daemon :app:assembleRelease
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "app/build/outputs/apk/release/MLScanner-release-$GITHUB_REF_NAME.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "app/build/outputs/apk/release/MLScanner-release-$RELEASE_TAG.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: signed-apk
-          path: app/build/outputs/apk/release/MLScanner-release-${{ github.ref_name }}.apk
+          path: app/build/outputs/apk/release/MLScanner-release-${{ env.RELEASE_TAG }}.apk
           if-no-files-found: error
   publish:
     needs: build
@@ -55,4 +65,4 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "MLScanner-release-$GITHUB_REF_NAME.apk" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        run: gh release create "$RELEASE_TAG" "MLScanner-release-$RELEASE_TAG.apk" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
